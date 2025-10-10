@@ -163,16 +163,17 @@ class DiscountController extends Controller
 
         if ($request->category === 'Seasonal_Discount') {
             $rules['valid_from'] = 'required|date|after_or_equal:today';
-            $rules['valid_until'] = 'required|date|after_or_equal:valid_from';
+            $rules['valid_until'] = 'required|date|after:valid_from';
         }
 
-        try {
-            $validated = $request->validate($rules);
-        } catch (ValidationException $e) {
-            return response()->json([
-                'status' => 'error',
-                'message' => $e->validator->errors()->first()
-            ], 422);
+        $validated = $request->validate($rules);
+
+        if ($validated['category'] === 'Seasonal_Discount' && Carbon::parse($validated['valid_from'])->lt(Carbon::today())) {
+            return $this->errorResponse('valid_from cannot be in the past.', 422);
+        }
+
+        if ($validated['category'] === 'Seasonal_Discount' && Carbon::parse($validated['valid_until'])->lt(Carbon::today())) {
+            return $this->errorResponse('valid_until cannot be in the past.', 422);
         }
 
         if ($validated['type'] === 'Percentage' && $validated['value'] > 100) {
