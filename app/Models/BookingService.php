@@ -5,26 +5,31 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-class FacilityType extends Model
+class BookingService extends Model
 {
     use SoftDeletes;
-    protected $table = 'facility_types';
+
+    public $table = 'booking_services';
     
     public $timestamps = true; // Make timestamps public
 
     protected $fillable = [
-        'name',
+        'booking_id',
+        'service_name',
+        'service_provider',
+        'amount',
     ];
 
     protected $casts = [
+        'amount' => 'decimal:2',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
     ];
 
     // Relationships
-    public function facilities()
+    public function booking()
     {
-        return $this->hasMany(Facility::class);
+        return $this->belongsTo(Booking::class);
     }
 }

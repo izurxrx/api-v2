@@ -1,51 +1,75 @@
 <?php
 
-use App\Http\Controllers\Api\UserController;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\AuditTrailController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BookingController;
+use App\Http\Controllers\Api\BookingServiceController;
+use App\Http\Controllers\Api\DiscountController;
 use App\Http\Controllers\Api\FacilityController;
+use App\Http\Controllers\Api\FacilityTypeController;
+use App\Http\Controllers\Api\GuestEntryController;
+use App\Http\Controllers\Api\GuestTypeController;
+use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\RateController;
+use App\Http\Controllers\Api\UserController;
+use Illuminate\Support\Facades\Route;
 
-//Accessing the login route without authentication gives token if credentials are correct
-Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,0.5');
+Route::post('/login', [AuthController::class, 'login'])->name('login');
 
-// Routes that needs token authentication to access
-Route::group(['middleware' => 'auth:sanctum'], function () {
-    
-    //Displays the authenticated user details
-    Route::get('/user', [UserController::class, 'profile']);
+Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
 
-    //Logout route to revoke the token and end the session of the logged in user
+    //Audit Trail routes
+    Route::apiResource('audit-trails', AuditTrailController::class);
+
+    // Auth routes
+    Route::get('/user', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::post('/change-password', [AuthController::class, 'changePassword']);
 
+    // Booking routes
+    Route::get('bookings/archived', [BookingController::class, 'archived']);
+    Route::apiResource('bookings', BookingController::class);
 
-    //User CRUD Routes
-    Route::get('/users', [UserController::class, 'getAllUsers']);
-    Route::post('/users', [UserController::class, 'addUser']);
-    Route::put('/users/{id}', [UserController::class, 'editUser']);
-    Route::delete('/users/{id}', [UserController::class, 'deactivateUser']);
-    Route::patch('/users/{id}', [UserController::class, 'activateUser']);
-    Route::get('/users/deactivated', [UserController::class, 'getDeactivatedUsers']);
+    // Booking Service routes
+    Route::get('booking-services/archived', [BookingServiceController::class, 'archived']);
+    Route::apiResource('booking-services', BookingServiceController::class);
 
-    //Facility CRUD Routes
-    Route::get('/facilities', [FacilityController::class, 'getAllFacilities']);
-    Route::get('/facility-types', [FacilityController::class, 'getAllFacilityTypes']);
-    Route::post('/facilities', [FacilityController::class, 'addFacility']);
-    Route::post('/facility-types', [FacilityController::class, 'addFacilityType']);
-    Route::put('/facilities/{id}', [FacilityController::class, 'editFacility']);
-    Route::delete('/facilities/{id}', [FacilityController::class, 'archiveFacility']);
-    Route::get('/facilities/archived', [FacilityController::class, 'viewArchivedFacilities']);
-    Route::patch('/facilities/{id}/restore', [FacilityController::class, 'restoreFacility']);
-    
-    //Rate Management CRUD Routes
-    Route::get('/rates', [RateController::class, 'getAllRates']);
-    Route::get('/rates/entrance-fees', [RateController::class, 'getEntranceFees']);
-    Route::get('/rates/exclusive', [RateController::class, 'getExclusiveRates']);
-    Route::post('/rates', [RateController::class, 'addRate']);
-    Route::patch('/rates/{id}', [RateController::class, 'archiveRate']);
-    Route::put('/rates/{id}', [RateController::class, 'editRate']);
-    Route::delete('/rates/{id}/restore', [RateController::class, 'restoreRate']);
-    Route::get('/rates/archived', [RateController::class, 'viewArchivedRates']);
+    // Discount routes
+    Route::get('discounts/archived', [DiscountController::class, 'archived']);
+    Route::post('discounts/{id}/restore', [DiscountController::class, 'restore']);  
+    Route::apiResource('discounts', DiscountController::class);
+
+    // Facility routes
+    Route::get('facilities/archived', [FacilityController::class, 'archived']);
+    Route::post('facilities/{facility}/restore', [FacilityController::class, 'restore']);
+    Route::put('facilities/{facility}/maintenance', [FacilityController::class, 'toggleMaintenance']);
+    Route::put('facilities/{facility}/availability', [FacilityController::class, 'toggleBookingAvailability']);
+    Route::apiResource('facilities', FacilityController::class);
+
+    // Facility types
+    Route::get('facility-types/archived', [FacilityTypeController::class, 'archived']);
+    Route::post('facility-types/{id}/restore', [FacilityTypeController::class, 'restore']);
+    Route::apiResource('facility-types', FacilityTypeController::class);
+
+    // Guest Entry routes
+    Route::get('guest-entries/archived', [GuestEntryController::class, 'archived']);
+    Route::apiResource('guest-entries', GuestEntryController::class);
+
+    // Guest Type routes
+    Route::get('guest-types/archived', [GuestTypeController::class, 'archived']);
+    Route::apiResource('guest-types', GuestTypeController::class);
+
+    // Payment routes
+    Route::get('payments/archived', [PaymentController::class, 'archived']);
+    Route::apiResource('payments', PaymentController::class);
+
+    // Rate routes
+    Route::get('rates/archived', [RateController::class, 'archived']);
+    Route::post('rates/{id}/restore', [RateController::class, 'restore']);
+    Route::apiResource('rates', RateController::class);
+
+    // User routes
+    Route::get('users/archived', [UserController::class, 'archived']);
+    Route::post('users/{id}/restore', [UserController::class, 'restore']);
+    Route::apiResource('users', UserController::class);
 });
-    

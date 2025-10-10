@@ -2,52 +2,67 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
-use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class User extends Authenticatable
 {
-    use HasApiTokens, HasFactory, Notifiable;
+    use HasApiTokens, SoftDeletes;
+    
+    protected $table = 'users';
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var list<string>
-     */
+    public $timestamps = true;
+
+    public const ROLES = ['Admin', 'Manager', 'Staff'];
+
     protected $fillable = [
-        'fullName',
         'username',
+        'full_name', 
+        'contact_no',
         'password',
         'role',
-        'is_active',
     ];
-
-    /**
-     * The attributes that should be hidden for serialization.
-     *
-     * @var list<string>
-     */
+    
     protected $hidden = [
         'password',
-        'remember_token',
     ];
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
-    protected function casts(): array
+    protected $casts = [
+        'password' => 'hashed',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime',
+    ];
+
+    // Relationships
+    public function bookings()
     {
-        return [
-            'is_active' => 'boolean',
-            'created_at' => 'date',
-            'password' => 'hashed',
-        ];
+        return $this->hasMany(Booking::class, 'created_by');
     }
 
-    const CREATED_AT = 'created_at';
-    const UPDATED_AT = 'modified_at';
+    public function guestEntries()
+    {
+        return $this->hasMany(GuestEntry::class, 'created_by');
+    }
+
+    public function paymentsReceived()
+    {
+        return $this->hasMany(Payment::class, 'received_by');
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === 'Admin';
+    }
+
+    public function isManager(): bool
+    {
+        return $this->role === 'Manager';
+    }
+
+    public function isStaff(): bool
+    {
+        return $this->role === 'Staff';
+    }
 }

@@ -2,147 +2,193 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Http\Controllers\Controller;
-use App\Http\Resources\FacilityResource;
-use App\Http\Resources\FacilityTypeResource;
 use App\Models\Facility;
-use App\Models\FacilityType;
+use App\Http\Resources\FacilityResource;
 use Illuminate\Http\Request;
+use App\Http\Controllers\Controller;
 
 class FacilityController extends Controller
 {
-    public function getAllFacilities()
+
+    public function archived(Request $request)
     {
-        $facilities = Facility::where('is_active', 1)
-            ->with('facilityType')
-            ->orderBy('name')
-            ->get();
-        return FacilityResource::collection($facilities);
-    }
+        $query = Facility::onlyTrashed()->with('facilityType');
 
-    public function getAllFacilityTypes()
-    {
-        $facilities = FacilityType::where('is_active', 1)->get(['id', 'name']);
-        return FacilityTypeResource::collection($facilities);
-    }
+        // Dynamic filters
+        $filters = [
+            'facility_type_id' => fn($q, $v) => $q->where('facility_type_id', $v),
+            'available_only' => fn($q, $v) => $v ? $q->available() : null,
+            'bookable_only' => fn($q, $v) => $v ? $q->forBooking() : null,
+            'is_maintenance' => fn($q, $v) => $q->where('is_maintenance', filter_var($v, FILTER_VALIDATE_BOOLEAN)),
+        ];
 
-    public function addFacility(Request $request)
-    {
-        // Validate input
-        $request->validate([
-            'name' => 'required|string|max:100',
-            'facility_type_id' => 'required|integer|exists:facility_types,id',
-            'quantity' => 'required|integer|min:1',
-            'description' => 'nullable|string',
-            'expectedCapacity' => 'nullable|integer|min:0',
-            'maxCapacity' => 'nullable|integer|min:0',
-        ]);
+        foreach ($filters as $param => $callback) {
+            if ($request->filled($param)) {
+                $callback($query, $request->input($param));
+            }
+        }
 
-        // Create facility
-        $facility = Facility::create([
-            'name' => $request->name,
-            'facility_type_id' => $request->facility_type_id,
-            'description' => $request->description ?? '',
-            'quantity' => $request->quantity,
-            'expected_capacity' => $request->expectedCapacity ?? 0,
-            'max_capacity' => $request->maxCapacity ?? 0,
-            'is_active' => 1,
-        ]);
-        
-        return response()->json([
-            "status" => "success",
-            "message" => "Facility added successfully",
-            "facility" => new FacilityResource($facility)
-        ], 201);
-    }
+        // Search
+        if ($request->filled('search')) {
+            $query->search($request->input('search'));
+        }
 
-    public function addFacilityType(Request $request)
-    {
-        // Validate input
-        $request->validate([
-            'name' => 'required|string|max:50|unique:facility_types,name',
-        ]);
+        // Sorting
+        $allowedSorts = ['name', 'quantity', 'expected_capacity', 'max_capacity', 'created_at'];
+        $sortBy = in_array($request->get('sort_by'), $allowedSorts) ? $request->get('sort_by') : 'name';
+        $sortDir = strtolower($request->get('sort_dir')) === 'desc' ? 'desc' : 'asc';
+        $query->orderBy($sortBy, $sortDir);
 
-        // Create facility type
-        $facilityType = FacilityType::create([
-            'name' => trim($request->name),
-            'is_active' => 1,
-        ]);
-        
-        return response()->json([
-            "status" => true,
-            "message" => "Facility type added successfully",
-            "facilityType" => new FacilityTypeResource($facilityType)
-        ], 201);
+        // Pagination
+        $perPage = $request->get('per_page', 15);
+        $facilities = $query->paginate($perPage);
+
+        return $this->successResponse(
+            FacilityResource::collection($facilities),
+            'Archived facilities retrieved successfully'
+        );
     }
     
-    public function editFacility(Request $request, $id)
+    public function index(Request $request)
     {
-        $request->validate([
+        $query = Facility::with('facilityType');
+
+        // Dynamic filters
+        $filters = [
+            'facility_type_id' => fn($q, $v) => $q->where('facility_type_id', $v),
+            'available_only' => fn($q, $v) => $v ? $q->available() : null,
+            'bookable_only' => fn($q, $v) => $v ? $q->forBooking() : null,
+            'is_maintenance' => fn($q, $v) => $q->where('is_maintenance', filter_var($v, FILTER_VALIDATE_BOOLEAN)),
+        ];
+
+        foreach ($filters as $param => $callback) {
+            if ($request->filled($param)) {
+                $callback($query, $request->input($param));
+            }
+        }
+
+        // Search
+        if ($request->filled('search')) {
+            $query->search($request->input('search'));
+        }
+
+        // Sorting
+        $allowedSorts = ['name', 'quantity', 'expected_capacity', 'max_capacity', 'created_at'];
+        $sortBy = in_array($request->get('sort_by'), $allowedSorts) ? $request->get('sort_by') : 'name';
+        $sortDir = strtolower($request->get('sort_dir')) === 'desc' ? 'desc' : 'asc';
+        $query->orderBy($sortBy, $sortDir);
+
+        // Pagination
+        $perPage = $request->get('per_page', 15);
+        $facilities = $query->paginate($perPage);
+
+        return $this->successResponse(
+            FacilityResource::collection($facilities),
+            'Facilities retrieved successfully'
+        );
+    }
+
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'facility_type_id' => 'required|exists:facility_types,id',
             'name' => 'required|string|max:100',
-            'facility_type_id' => 'required|integer|exists:facility_types,id',
             'quantity' => 'required|integer|min:1',
-            'description' => 'nullable|string',
-            'expectedCapacity' => 'nullable|integer|min:0',
-            'maxCapacity' => 'nullable|integer|min:0',
+            'expected_capacity' => 'required|integer|min:1',
+            'max_capacity' => 'required|integer|min:1|gte:expected_capacity',
+            'description' => 'nullable|string|max:1000',
+            'is_maintenance' => 'boolean',
+            'is_available_for_booking' => 'boolean',
         ]);
 
-        $facility = Facility::where('id', $id)->where('is_active', 1)->firstOrFail();
+        $facility = Facility::create($validated);
 
-        $facility->name = $request->name;
-        $facility->facility_type_id = $request->facility_type_id;
-        $facility->description = $request->description ?? '';
-        $facility->quantity = $request->quantity;
-        $facility->expected_capacity = $request->expectedCapacity ?? 0;
-        $facility->max_capacity = $request->maxCapacity ?? 0;
-        $facility->save();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Facility updated successfully',
-            'facility' => new FacilityResource($facility)
-        ]);
+        return $this->successResponse(
+            new FacilityResource($facility->load('facilityType')),
+            'Facility created successfully',
+            201
+        );
     }
 
-    public function archiveFacility(Request $request, $id)
+    public function show(Facility $facility)
     {
-        // Find the facility and check if it's active
-        $facility = Facility::where('id', $id)->where('is_active', 1)->firstOrFail();
-
-        // Archive the facility
-        $facility->is_active = 0;
-        $facility->save();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Facility archived successfully',
-            'facility' => new FacilityResource($facility)
-        ]);
+        $facility->load(['facilityType', 'rates']);
+        return $this->successResponse(
+            new FacilityResource($facility),
+            'Facility retrieved successfully'
+        );
     }
 
-    public function viewArchivedFacilities()
+    public function update(Request $request, Facility $facility)
     {
-        $facilities = Facility::where('is_active', 0)
-            ->with('facilityType')
-            ->orderBy('name')
-            ->get();
+        $validated = $request->validate([
+            'facility_type_id' => 'required|exists:facility_types,id',
+            'name' => 'required|string|max:100',
+            'quantity' => 'required|integer|min:1',
+            'expected_capacity' => 'required|integer|min:1',
+            'max_capacity' => 'required|integer|min:1|gte:expected_capacity',
+            'description' => 'nullable|string|max:1000',
+            'is_maintenance' => 'boolean',
+            'is_available_for_booking' => 'boolean',
+        ]);
 
-        return FacilityResource::collection($facilities);
+        $facility->update($validated);
+
+        return $this->successResponse(
+            new FacilityResource($facility->fresh()->load('facilityType')),
+            'Facility updated successfully'
+        );
     }
 
-    public function restoreFacility(Request $request, $id)
+    public function destroy(Facility $facility)
     {
-        // Find the archived facility
-        $facility = Facility::where('id', $id)->where('is_active', 0)->firstOrFail();
+        if ($facility->bookings()->exists() || $facility->rates()->exists()) {
+            return $this->errorResponse(
+                'Cannot delete facility. It has associated bookings or rates.',
+                422
+            );
+        }
 
-        // Restore the facility
-        $facility->is_active = 1;
+        $facility->delete();
+
+        return $this->successResponse(null, 'Facility deleted successfully');
+    }
+
+    public function restore($id)
+    {
+        $facility = Facility::onlyTrashed()->findOrFail($id);
+        
+        $facility->restore();
+        
+        return $this->successResponse(
+            new FacilityResource($facility->fresh()->load('facilityType')),
+            'Facility restored successfully'
+        );
+    }
+
+    public function toggleMaintenance(Facility $facility)
+    {
+        $facility->is_maintenance = !$facility->is_maintenance;
         $facility->save();
+        $facility->refresh();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Facility restored successfully',
-            'facility' => new FacilityResource($facility)
-        ]);
+        $status = $facility->is_maintenance ? 'enabled' : 'disabled';
+        return $this->successResponse(
+            new FacilityResource($facility),
+            "Maintenance mode {$status} for facility"
+        );
+    }
+
+    public function toggleBookingAvailability(Facility $facility)
+    {
+        $facility->is_available_for_booking = !$facility->is_available_for_booking;
+        $facility->save();
+        $facility->refresh();
+
+        $status = $facility->is_available_for_booking ? 'enabled' : 'disabled';
+        return $this->successResponse(
+            new FacilityResource($facility),
+            "Booking availability {$status} for facility"
+        );
     }
 }
