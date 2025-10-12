@@ -2,53 +2,37 @@
 
 namespace App\Models;
 
+use App\Models\GuestEntry;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Models\User;
 
 class Payment extends Model
 {
     use SoftDeletes;
 
-    public $table = 'payments';
-    
-    public $timestamps = true; // Make timestamps public
-
     protected $fillable = [
-        'transaction_reference',
-        'transaction_type',
-        'transaction_id',
-        'payment_date',
-        'payment_time',
-        'payment_method',
-        'amount_paid',
-        'received_by',
-        'notes',
+        'guest_entry_id',
+        'amount',
+        'payment_type',
+        'received_by', 
+        'payment_date'
     ];
 
     protected $casts = [
-        'payment_date' => 'date',
-        'payment_time' => 'datetime:H:i',
-        'amount_paid' => 'decimal:2',
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
-        'deleted_at' => 'datetime',
+        'payment_date' => 'datetime',
+        'amount' => 'decimal:2',
     ];
 
-    // Relationships
-    public function receiver()
-    {
+    public function guestEntry() {
+        return $this->belongsTo(GuestEntry::class, 'guest_entry_id');
+    }
+
+    public function receiver() {
         return $this->belongsTo(User::class, 'received_by');
     }
 
-    public function booking()
-    {
-        return $this->belongsTo(Booking::class, 'transaction_id')
-                   ->where('transaction_type', 'Booking');
-    }
-
-    public function guestEntry()
-    {
-        return $this->belongsTo(GuestEntry::class, 'transaction_id')
-                   ->where('transaction_type', 'Walk_In_Entry');
+    public function isDownpayment(): bool {
+        return strtolower($this->payment_type) === 'downpayment';
     }
 }

@@ -4,15 +4,14 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Resources\Json\JsonResource;
 
-class RateResource extends JsonResource
+class RoleResource extends JsonResource
 {
     public function toArray($request)
     {
         return [
             'id' => $this->id,
-            'rate_name' => $this->rate_name,
-            'rate_category' => $this->rate_category,
-            'base_amount' => number_format($this->base_amount, 2),
+            'name' => $this->name,
+            'permissions' => $this->permissions->pluck('name'),
             'created_at' => $this->created_at?->toDateTimeString(),
             'updated_at' => $this->updated_at?->toDateTimeString(),
         ];

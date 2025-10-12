@@ -8,23 +8,13 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 class FacilityType extends Model
 {
     use SoftDeletes;
-    protected $table = 'facility_types';
-    
-    public $timestamps = true; // Make timestamps public
 
     protected $fillable = [
-        'name',
+        'name', 
+        'description'
     ];
 
-    protected $casts = [
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
-        'deleted_at' => 'datetime',
-    ];
-
-    // Relationships
-    public function facilities()
-    {
-        return $this->hasMany(Facility::class);
+    public function facilities() {
+        return $this->hasMany(Facility::class, 'facility_type_id');
     }
 }
