@@ -56,32 +56,4 @@ class AuthController extends Controller
         return $this->successResponse(new UserResource($request->user()), 'User profile retrieved successfully');
     }
 
-    public function changePassword(Request $request)
-    {
-        $validated = $request->validate([
-            'current_password' => 'required|string|max:255',
-            'new_password' => [
-                'required',
-                'string',
-                'min:8',
-                'confirmed',
-            ],
-        ]);
-
-        $user = $request->user();
-
-        if (!Hash::check($validated['current_password'], $user->password)) {
-            return $this->errorResponse('Current password is incorrect', 422);
-        }
-
-        if (Hash::check($validated['new_password'], $user->password)) {
-            return $this->errorResponse('New password cannot be the same as the current password', 422);
-        }
-
-        $user->update([
-            'password' => Hash::make($validated['new_password']),
-        ]);
-
-        return $this->successResponse(null, 'Password changed successfully');
-    }
 }
