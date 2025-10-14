@@ -194,7 +194,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [UserController::class, 'store'])
             ->middleware('permission:manage-users');
 
-        // Move archived BEFORE /{id}
         Route::get('/archived', [UserController::class, 'archived'])
             ->middleware('permission:manage-users');
         

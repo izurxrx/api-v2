@@ -221,7 +221,7 @@ endpoints:
         name: check_in_date
         description: 'Must be a valid date.'
         required: true
-        example: '2025-10-12T21:45:19'
+        example: '2025-10-14T17:18:32'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -231,7 +231,7 @@ endpoints:
         name: check_out_date
         description: 'Must be a valid date. Must be a date after or equal to <code>check_in_date</code>.'
         required: true
-        example: '2051-11-05'
+        example: '2051-11-07'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -341,8 +341,8 @@ endpoints:
       guest_name: b
       contact_number: ngzmiyvdljnikhwa
       facility_id: architecto
-      check_in_date: '2025-10-12T21:45:19'
-      check_out_date: '2051-11-05'
+      check_in_date: '2025-10-14T17:18:32'
+      check_out_date: '2051-11-07'
       check_in_time: architecto
       check_out_time: architecto
       number_of_guests: 22
@@ -468,7 +468,7 @@ endpoints:
         name: check_in_date
         description: 'Must be a valid date.'
         required: false
-        example: '2025-10-12T21:45:19'
+        example: '2025-10-14T17:18:32'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -478,7 +478,7 @@ endpoints:
         name: check_out_date
         description: 'Must be a valid date. Must be a date after or equal to <code>check_in_date</code>.'
         required: false
-        example: '2051-11-05'
+        example: '2051-11-07'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -567,8 +567,8 @@ endpoints:
     cleanBodyParameters:
       guest_name: b
       contact_number: ngzmiyvdljnikhwa
-      check_in_date: '2025-10-12T21:45:19'
-      check_out_date: '2051-11-05'
+      check_in_date: '2025-10-14T17:18:32'
+      check_out_date: '2051-11-07'
       number_of_guests: 22
       subtotal: 84
       discount_amount: 12
@@ -878,7 +878,7 @@ endpoints:
         name: entry_date
         description: 'Must be a valid date.'
         required: true
-        example: '2025-10-12T21:45:19'
+        example: '2025-10-14T17:18:32'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -888,7 +888,7 @@ endpoints:
         name: entry_time
         description: 'Must be a valid date in the format <code>H:i</code>.'
         required: false
-        example: '21:45'
+        example: '17:18'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -989,7 +989,7 @@ endpoints:
         name: 'facilities[].start_datetime'
         description: 'Must be a valid date.'
         required: true
-        example: '2025-10-12T21:45:19'
+        example: '2025-10-14T17:18:32'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -999,7 +999,7 @@ endpoints:
         name: 'facilities[].end_datetime'
         description: 'Must be a valid date. Must be a date after <code>facilities.*.start_datetime</code>.'
         required: true
-        example: '2051-11-05'
+        example: '2051-11-07'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -1008,8 +1008,8 @@ endpoints:
     cleanBodyParameters:
       guest_name: b
       contact_number: ngzmiyvdljnikhwa
-      entry_date: '2025-10-12T21:45:19'
-      entry_time: '21:45'
+      entry_date: '2025-10-14T17:18:32'
+      entry_time: '17:18'
       notes: architecto
       guests:
         -
@@ -1020,8 +1020,8 @@ endpoints:
         -
           facility_id: architecto
           rate_id: architecto
-          start_datetime: '2025-10-12T21:45:19'
-          end_datetime: '2051-11-05'
+          start_datetime: '2025-10-14T17:18:32'
+          end_datetime: '2051-11-07'
     fileParameters: []
     responses: []
     responseFields: []
@@ -1503,7 +1503,7 @@ endpoints:
         name: is_available_for_booking
         description: ''
         required: false
-        example: false
+        example: true
         type: boolean
         enumValues: []
         exampleWasSpecified: false
@@ -1517,9 +1517,49 @@ endpoints:
       max_capacity: 77
       description: 'Eius et animi quos velit et.'
       is_maintenance: false
-      is_available_for_booking: false
+      is_available_for_booking: true
     fileParameters: []
     responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+    custom: []
+  -
+    httpMethods:
+      - GET
+    uri: api/facilities/archived
+    metadata:
+      groupName: Endpoints
+      groupDescription: ''
+      subgroup: ''
+      subgroupDescription: ''
+      title: ''
+      description: ''
+      authenticated: false
+      deprecated: false
+      custom: []
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        status: 500
+        content: '{"status":"error","message":"Unauthenticated.","errors":null}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+        description: null
+        custom: []
     responseFields: []
     auth: []
     controller: null
@@ -1674,7 +1714,7 @@ endpoints:
         name: is_maintenance
         description: ''
         required: false
-        example: false
+        example: true
         type: boolean
         enumValues: []
         exampleWasSpecified: false
@@ -1696,7 +1736,7 @@ endpoints:
       expected_capacity: 84
       max_capacity: 12
       description: 'Eius et animi quos velit et.'
-      is_maintenance: false
+      is_maintenance: true
       is_available_for_booking: true
     fileParameters: []
     responses: []
@@ -1742,46 +1782,6 @@ endpoints:
     cleanBodyParameters: []
     fileParameters: []
     responses: []
-    responseFields: []
-    auth: []
-    controller: null
-    method: null
-    route: null
-    custom: []
-  -
-    httpMethods:
-      - GET
-    uri: api/facilities/archived
-    metadata:
-      groupName: Endpoints
-      groupDescription: ''
-      subgroup: ''
-      subgroupDescription: ''
-      title: ''
-      description: ''
-      authenticated: false
-      deprecated: false
-      custom: []
-    headers:
-      Content-Type: application/json
-      Accept: application/json
-    urlParameters: []
-    cleanUrlParameters: []
-    queryParameters: []
-    cleanQueryParameters: []
-    bodyParameters: []
-    cleanBodyParameters: []
-    fileParameters: []
-    responses:
-      -
-        status: 500
-        content: '{"status":"error","message":"Unauthenticated.","errors":null}'
-        headers:
-          cache-control: 'no-cache, private'
-          content-type: application/json
-          access-control-allow-origin: '*'
-        description: null
-        custom: []
     responseFields: []
     auth: []
     controller: null
@@ -1985,6 +1985,46 @@ endpoints:
   -
     httpMethods:
       - GET
+    uri: api/rates/archived
+    metadata:
+      groupName: Endpoints
+      groupDescription: ''
+      subgroup: ''
+      subgroupDescription: ''
+      title: ''
+      description: ''
+      authenticated: false
+      deprecated: false
+      custom: []
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        status: 500
+        content: '{"status":"error","message":"Unauthenticated.","errors":null}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+        description: null
+        custom: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+    custom: []
+  -
+    httpMethods:
+      - GET
     uri: 'api/rates/{id}'
     metadata:
       groupName: Endpoints
@@ -2103,7 +2143,7 @@ endpoints:
         name: rate_type
         description: ''
         required: false
-        example: Day_Based
+        example: Time_Based
         type: string
         enumValues:
           - Day_Based
@@ -2144,7 +2184,7 @@ endpoints:
     cleanBodyParameters:
       rate_name: b
       rate_category: Exclusive
-      rate_type: Day_Based
+      rate_type: Time_Based
       base_price: 39
       duration: 67
       extension_fee: 12
@@ -2192,46 +2232,6 @@ endpoints:
     cleanBodyParameters: []
     fileParameters: []
     responses: []
-    responseFields: []
-    auth: []
-    controller: null
-    method: null
-    route: null
-    custom: []
-  -
-    httpMethods:
-      - GET
-    uri: api/rates/archived
-    metadata:
-      groupName: Endpoints
-      groupDescription: ''
-      subgroup: ''
-      subgroupDescription: ''
-      title: ''
-      description: ''
-      authenticated: false
-      deprecated: false
-      custom: []
-    headers:
-      Content-Type: application/json
-      Accept: application/json
-    urlParameters: []
-    cleanUrlParameters: []
-    queryParameters: []
-    cleanQueryParameters: []
-    bodyParameters: []
-    cleanBodyParameters: []
-    fileParameters: []
-    responses:
-      -
-        status: 500
-        content: '{"status":"error","message":"Unauthenticated.","errors":null}'
-        headers:
-          cache-control: 'no-cache, private'
-          content-type: application/json
-          access-control-allow-origin: '*'
-        description: null
-        custom: []
     responseFields: []
     auth: []
     controller: null
@@ -2400,7 +2400,7 @@ endpoints:
         name: is_guest_type_discount
         description: ''
         required: false
-        example: false
+        example: true
         type: boolean
         enumValues: []
         exampleWasSpecified: false
@@ -2410,7 +2410,7 @@ endpoints:
         name: valid_from
         description: 'Must be a valid date.'
         required: false
-        example: '2025-10-12T21:45:19'
+        example: '2025-10-14T17:18:32'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -2420,7 +2420,7 @@ endpoints:
         name: valid_until
         description: 'Must be a valid date. Must be a date after or equal to <code>valid_from</code>.'
         required: false
-        example: '2051-11-05'
+        example: '2051-11-07'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -2432,11 +2432,51 @@ endpoints:
       category: Direct_Discount
       type: Fixed_Amount
       value: 60
-      is_guest_type_discount: false
-      valid_from: '2025-10-12T21:45:19'
-      valid_until: '2051-11-05'
+      is_guest_type_discount: true
+      valid_from: '2025-10-14T17:18:32'
+      valid_until: '2051-11-07'
     fileParameters: []
     responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+    custom: []
+  -
+    httpMethods:
+      - GET
+    uri: api/discounts/archived
+    metadata:
+      groupName: Endpoints
+      groupDescription: ''
+      subgroup: ''
+      subgroupDescription: ''
+      title: ''
+      description: ''
+      authenticated: false
+      deprecated: false
+      custom: []
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        status: 500
+        content: '{"status":"error","message":"Unauthenticated.","errors":null}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+        description: null
+        custom: []
     responseFields: []
     auth: []
     controller: null
@@ -2551,7 +2591,7 @@ endpoints:
         name: category
         description: ''
         required: false
-        example: Seasonal_Discount
+        example: Direct_Discount
         type: string
         enumValues:
           - Seasonal_Discount
@@ -2563,7 +2603,7 @@ endpoints:
         name: type
         description: ''
         required: false
-        example: Fixed_Amount
+        example: Percentage
         type: string
         enumValues:
           - Percentage
@@ -2585,7 +2625,7 @@ endpoints:
         name: is_guest_type_discount
         description: ''
         required: false
-        example: true
+        example: false
         type: boolean
         enumValues: []
         exampleWasSpecified: false
@@ -2595,7 +2635,7 @@ endpoints:
         name: valid_from
         description: 'Must be a valid date.'
         required: false
-        example: '2025-10-12T21:45:19'
+        example: '2025-10-14T17:18:32'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -2605,7 +2645,7 @@ endpoints:
         name: valid_until
         description: 'Must be a valid date. Must be a date after or equal to <code>valid_from</code>.'
         required: false
-        example: '2051-11-05'
+        example: '2051-11-07'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -2614,12 +2654,12 @@ endpoints:
     cleanBodyParameters:
       name: b
       description: 'Eius et animi quos velit et.'
-      category: Seasonal_Discount
-      type: Fixed_Amount
+      category: Direct_Discount
+      type: Percentage
       value: 60
-      is_guest_type_discount: true
-      valid_from: '2025-10-12T21:45:19'
-      valid_until: '2051-11-05'
+      is_guest_type_discount: false
+      valid_from: '2025-10-14T17:18:32'
+      valid_until: '2051-11-07'
     fileParameters: []
     responses: []
     responseFields: []
@@ -2664,46 +2704,6 @@ endpoints:
     cleanBodyParameters: []
     fileParameters: []
     responses: []
-    responseFields: []
-    auth: []
-    controller: null
-    method: null
-    route: null
-    custom: []
-  -
-    httpMethods:
-      - GET
-    uri: api/discounts/archived
-    metadata:
-      groupName: Endpoints
-      groupDescription: ''
-      subgroup: ''
-      subgroupDescription: ''
-      title: ''
-      description: ''
-      authenticated: false
-      deprecated: false
-      custom: []
-    headers:
-      Content-Type: application/json
-      Accept: application/json
-    urlParameters: []
-    cleanUrlParameters: []
-    queryParameters: []
-    cleanQueryParameters: []
-    bodyParameters: []
-    cleanBodyParameters: []
-    fileParameters: []
-    responses:
-      -
-        status: 500
-        content: '{"status":"error","message":"Unauthenticated.","errors":null}'
-        headers:
-          cache-control: 'no-cache, private'
-          content-type: application/json
-          access-control-allow-origin: '*'
-        description: null
-        custom: []
     responseFields: []
     auth: []
     controller: null
@@ -2939,6 +2939,46 @@ endpoints:
   -
     httpMethods:
       - GET
+    uri: api/facility-types/archived
+    metadata:
+      groupName: Endpoints
+      groupDescription: ''
+      subgroup: ''
+      subgroupDescription: ''
+      title: ''
+      description: ''
+      authenticated: false
+      deprecated: false
+      custom: []
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        status: 500
+        content: '{"status":"error","message":"Unauthenticated.","errors":null}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+        description: null
+        custom: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+    custom: []
+  -
+    httpMethods:
+      - GET
     uri: 'api/facility-types/{id}'
     metadata:
       groupName: Endpoints
@@ -3094,46 +3134,6 @@ endpoints:
     custom: []
   -
     httpMethods:
-      - GET
-    uri: api/facility-types/archived
-    metadata:
-      groupName: Endpoints
-      groupDescription: ''
-      subgroup: ''
-      subgroupDescription: ''
-      title: ''
-      description: ''
-      authenticated: false
-      deprecated: false
-      custom: []
-    headers:
-      Content-Type: application/json
-      Accept: application/json
-    urlParameters: []
-    cleanUrlParameters: []
-    queryParameters: []
-    cleanQueryParameters: []
-    bodyParameters: []
-    cleanBodyParameters: []
-    fileParameters: []
-    responses:
-      -
-        status: 500
-        content: '{"status":"error","message":"Unauthenticated.","errors":null}'
-        headers:
-          cache-control: 'no-cache, private'
-          content-type: application/json
-          access-control-allow-origin: '*'
-        description: null
-        custom: []
-    responseFields: []
-    auth: []
-    controller: null
-    method: null
-    route: null
-    custom: []
-  -
-    httpMethods:
       - POST
     uri: 'api/facility-types/{id}/restore'
     metadata:
@@ -3262,7 +3262,7 @@ endpoints:
         name: payment_date
         description: 'Must be a valid date.'
         required: true
-        example: '2025-10-12T21:45:19'
+        example: '2025-10-14T17:18:32'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -3272,7 +3272,7 @@ endpoints:
         name: payment_time
         description: 'Must be a valid date in the format <code>H:i</code>.'
         required: false
-        example: '21:45'
+        example: '17:18'
         type: string
         enumValues: []
         exampleWasSpecified: false
@@ -3331,8 +3331,8 @@ endpoints:
     cleanBodyParameters:
       transaction_type: Booking
       transaction_id: 16
-      payment_date: '2025-10-12T21:45:19'
-      payment_time: '21:45'
+      payment_date: '2025-10-14T17:18:32'
+      payment_time: '17:18'
       payment_method: ngzmiyvdljnikhwa
       amount_paid: 50
       change_amount: 62
@@ -3543,14 +3543,11 @@ endpoints:
         custom: []
       role:
         name: role
-        description: ''
+        description: 'The <code>name</code> of an existing record in the roles table.'
         required: true
-        example: Admin
+        example: architecto
         type: string
-        enumValues:
-          - Admin
-          - Staff
-          - Manager
+        enumValues: []
         exampleWasSpecified: false
         nullable: false
         custom: []
@@ -3559,9 +3556,49 @@ endpoints:
       full_name: 'n'
       contact_no: gzmiyvdljnikhway
       password: '#iw/kXaz<m5L[)~=NG'
-      role: Admin
+      role: architecto
     fileParameters: []
     responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+    custom: []
+  -
+    httpMethods:
+      - GET
+    uri: api/users/archived
+    metadata:
+      groupName: Endpoints
+      groupDescription: ''
+      subgroup: ''
+      subgroupDescription: ''
+      title: ''
+      description: ''
+      authenticated: false
+      deprecated: false
+      custom: []
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        status: 500
+        content: '{"status":"error","message":"Unauthenticated.","errors":null}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+        description: null
+        custom: []
     responseFields: []
     auth: []
     controller: null
@@ -3692,25 +3729,11 @@ endpoints:
         exampleWasSpecified: false
         nullable: true
         custom: []
-      role:
-        name: role
-        description: ''
-        required: true
-        example: Manager
-        type: string
-        enumValues:
-          - Admin
-          - Staff
-          - Manager
-        exampleWasSpecified: false
-        nullable: false
-        custom: []
     cleanBodyParameters:
       username: b
       full_name: 'n'
       contact_no: gzmiyvdljnikhway
       password: '#iw/kXaz<m5L[)~=NG'
-      role: Manager
     fileParameters: []
     responses: []
     responseFields: []
@@ -3806,7 +3829,7 @@ endpoints:
   -
     httpMethods:
       - GET
-    uri: api/users/archived
+    uri: api/roles
     metadata:
       groupName: Endpoints
       groupDescription: ''
