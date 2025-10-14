@@ -15,7 +15,7 @@ class UserController extends Controller
     {
         $query = User::onlyTrashed();
 
-        // Search functionality
+        //Search
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
@@ -25,30 +25,26 @@ class UserController extends Controller
             });
         }
 
-        // Filter by role
+        //Filter by role
         if ($request->filled('role')) {
-            $query->where('role', $request->role);
+            $query->role($request->role);
         }
 
-        // Sorting
+        //Sorting
         $sortBy = $request->get('sort_by', 'created_at');
         $sortOrder = $request->get('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
 
-        $perPage = (int) $request->get('per_page', 15);
+        $perPage = (int) $request->get('per_page', 5);
         $users = $query->paginate($perPage);
 
-        return $this->successResponse(
-            UserResource::collection($users),
-            'Archived users retrieved successfully'
-        );
+        return $this->paginatedCollection($users, UserResource::class);
     }
     
     public function index(Request $request)
     {
         $query = User::query();
 
-        // Search functionality
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
@@ -58,23 +54,18 @@ class UserController extends Controller
             });
         }
 
-        // Filter by role
         if ($request->filled('role')) {
-            $query->where('role', $request->role);
+            $query->role($request->role);
         }
 
-        // Sorting
         $sortBy = $request->get('sort_by', 'created_at');
         $sortOrder = $request->get('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
 
-        $perPage = (int) $request->get('per_page', 15);
+        $perPage = (int) $request->get('per_page', 5);
         $users = $query->paginate($perPage);
 
-        return $this->successResponse(
-            UserResource::collection($users),
-            'Users retrieved successfully'
-        );
+        return $this->paginatedCollection($users, UserResource::class);
     }
 
     public function store(Request $request)
@@ -84,21 +75,22 @@ class UserController extends Controller
             'full_name' => 'required|string|max:100',
             'contact_no' => 'nullable|string|max:20',
             'password' => 'required|string|min:6',
-            'role' => 'required|in:Admin,Staff,Manager',
+            'role' => 'required|string|exists:roles,name',
         ]);
+        
+        $role = $request->input('role');
 
-        // Role-based restrictions
-        if ($validated['role'] === 'Admin' && User::where('role', 'Admin')->exists()) {
+        if ($role === 'Admin' && User::role('Admin')->exists()) {
             return response()->json(['message' => 'Cannot create another Admin.'], 422);
         }
 
-        if ($validated['role'] === 'Manager' && auth()->user()?->isManager()) {
-            // Managers cannot create Admin
+        if ($role === 'Manager' && auth()->user()?->hasRole('Manager')) {
             return response()->json(['message' => 'Managers cannot create Admins.'], 422);
         }
 
         $validated['password'] = Hash::make($validated['password']);
         $user = User::create($validated);
+        $user->assignRole($role);
 
         return $this->successResponse(new UserResource($user), 'User created successfully', 201);
     }
@@ -119,7 +111,6 @@ class UserController extends Controller
             'full_name' => 'required|string|max:100',
             'contact_no' => 'nullable|string|max:20',
             'password' => 'nullable|string|min:6',
-            'role' => 'required|in:Admin,Staff,Manager',
         ]);
 
         $currentUser = auth()->user();
@@ -145,39 +136,20 @@ class UserController extends Controller
         return $this->successResponse(new UserResource($user->fresh()), 'User updated successfully');
     }
 
-
-    public function destroy(User $user)
+    public function destroy($id)
     {
-        $currentUser = auth()->user();
-
-        // Protect Admin
-        if ($user->isAdmin() && $user->id !== $currentUser->id) {
-            return response()->json(['message' => 'Cannot delete another Admin.'], 422);
-        }
-
-        // Manager cannot delete Admin
-        if ($currentUser->isManager() && $user->isAdmin()) {
-            return response()->json(['message' => 'Managers cannot delete Admins.'], 422);
-        }
-
-        // Staff cannot delete Admin or Manager
-        if ($currentUser->isStaff() && ($user->isAdmin() || $user->isManager())) {
-            return response()->json(['message' => 'Staff cannot delete Admins or Managers.'], 422);
-        }
-
+        $user = User::withTrashed()->findOrFail($id);
         $user->delete();
 
-        return $this->successResponse(null, 'User deleted successfully');
-    }
-
-    public function getRoles()
-    {
-        return $this->successResponse(User::ROLES);
+        return $this->successResponse(
+            new UserResource($user),
+            'User deleted successfully'
+        );
     }
 
     public function restore($id)
     {
-        $user = User::withTrashed()->findOrFail($id);
+        $user = User::onlyTrashed()->findOrFail($id);
         $user->restore();
 
         return $this->successResponse(

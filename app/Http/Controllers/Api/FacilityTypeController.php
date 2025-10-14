@@ -2,142 +2,101 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Models\FacilityType;
-use App\Http\Resources\FacilityTypeResource;
-use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
+use App\Http\Resources\FacilityTypeResource;
+use App\Models\FacilityType;
+use Illuminate\Http\Request;
 
 class FacilityTypeController extends Controller
 {
     public function index(Request $request)
     {
-        $query = FacilityType::query();
+        $query = FacilityType::withCount('facilities');
 
-        // Include facilities count
-        if ($request->boolean('with_facilities_count')) {
-            $query->withCount('facilities');
+        if ($request->has('search')) {
+            $query->where('name', 'like', "%{$request->search}%");
         }
 
-        // Include facilities
-        if ($request->boolean('with_facilities')) {
-            $query->with('facilities');
-        }
+        $perPage = $request->input('per_page', 5);
+        $facilityTypes = $query->paginate($perPage);
 
-        // Search functionality
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%");
-            });
-        }
-        
-        $facilityTypes = $query->orderBy('name')->paginate($request->get('per_page', 15));
-
-        return $this->successResponse(
-            FacilityTypeResource::collection($facilityTypes),
-            'Facility types retrieved successfully'
-        );
+        return $this->paginatedCollection($facilityTypes, FacilityTypeResource::class);
     }
 
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'name' => 'required|string|max:100|unique:facility_types',
+            'name' => 'required|string|max:100|unique:facility_types,name',
+            'description' => 'nullable|string',
         ]);
 
         $facilityType = FacilityType::create($validated);
 
-        return $this->successResponse(
-            new FacilityTypeResource($facilityType),
-            'Facility type created successfully',
-            201
-        );
+        return response()->json([
+            'message' => 'Facility type created successfully',
+            'data' => new FacilityTypeResource($facilityType),
+        ], 201);
     }
 
-    public function show(FacilityType $facilityType)
+    public function show($id)
     {
-        $facilityType->load('facilities');
-        return $this->successResponse(
-            new FacilityTypeResource($facilityType),
-            'Facility type retrieved successfully'
-        );
-    }
-    
-    public function archived(Request $request)
-    {
-        $query = FacilityType::onlyTrashed();
+        $facilityType = FacilityType::with('facilities')->findOrFail($id);
 
-        // Include facilities count
-        if ($request->boolean('with_facilities_count')) {
-            $query->withCount(['facilities' => function ($q) {
-                $q->withTrashed();
-            }]);
-        }
-
-        // Include facilities
-        if ($request->boolean('with_facilities')) {
-            $query->with(['facilities' => function ($q) {
-                $q->withTrashed();
-            }]);
-        }
-
-        // Search functionality
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%");
-            });
-        }
-
-        $facilityTypes = $query->orderBy('name')->paginate($request->get('per_page', 15));
-
-        return $this->successResponse(
-            FacilityTypeResource::collection($facilityTypes),
-            'Archived facility types retrieved successfully'
-        );
+        return response()->json([
+            'data' => new FacilityTypeResource($facilityType),
+        ]);
     }
 
-    public function update(Request $request, FacilityType $facilityType)
+    public function update(Request $request, $id)
     {
+        $facilityType = FacilityType::findOrFail($id);
+
         $validated = $request->validate([
-            'name' => 'required|string|max:100|unique:facility_types,name,' . $facilityType->id
+            'name' => 'sometimes|string|max:100|unique:facility_types,name,' . $id,
+            'description' => 'nullable|string',
         ]);
 
         $facilityType->update($validated);
 
-        return $this->successResponse(
-            new FacilityTypeResource($facilityType->fresh()),
-            'Facility type updated successfully'
-        );
+        return response()->json([
+            'message' => 'Facility type updated successfully',
+            'data' => new FacilityTypeResource($facilityType),
+        ]);
     }
 
-    public function destroy(FacilityType $facilityType)
+    public function destroy($id)
     {
-        // Check if facility type has facilities
-        if ($facilityType->facilities()->exists()) {
-            return $this->errorResponse(
-                'Cannot delete facility type. It has associated facilities.',
-                422
-            );
+        $facilityType = FacilityType::findOrFail($id);
+        
+        // Check if has facilities
+        if ($facilityType->facilities()->count() > 0) {
+            return response()->json([
+                'message' => 'Cannot delete facility type with existing facilities',
+            ], 400);
         }
 
         $facilityType->delete();
 
-        return $this->successResponse(
-            null,
-            'Facility type deleted successfully'
-        );
+        return response()->json([
+            'message' => 'Facility type deleted successfully',
+        ]);
+    }
+
+    public function archived()
+    {
+        $facilityTypes = FacilityType::onlyTrashed()->withCount('facilities')->paginate(5);
+
+        return $this->paginatedCollection($facilityTypes, FacilityTypeResource::class);
     }
 
     public function restore($id)
     {
         $facilityType = FacilityType::onlyTrashed()->findOrFail($id);
-
         $facilityType->restore();
-        
-        return $this->successResponse(
-            new FacilityTypeResource($facilityType->fresh()),
-            'Facility type restored successfully'
-        );
+
+        return response()->json([
+            'message' => 'Facility type restored successfully',
+            'data' => new FacilityTypeResource($facilityType),
+        ]);
     }
 }

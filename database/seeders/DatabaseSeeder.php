@@ -16,6 +16,7 @@ class DatabaseSeeder extends Seeder
             FacilityTypeSeeder::class,
             FacilitySeeder::class,
             RateSeeder::class,
+            
         ]);
     }
 }

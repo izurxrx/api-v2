@@ -2,50 +2,72 @@
 
 namespace App\Http\Resources;
 
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-use Carbon\Carbon;
 
 class BookingResource extends JsonResource
 {
-    public function toArray($request)
+    public function toArray(Request $request): array
     {
         return [
             'id' => $this->id,
             'booking_reference' => $this->booking_reference,
             'guest_name' => $this->guest_name,
             'contact_number' => $this->contact_number,
-            'facility' => [
-                'id' => $this->facility->id ?? null,
-                'name' => $this->facility->name ?? null,
-                'max_capacity' => $this->facility->max_capacity ?? 0,
-            ],
-            'check_in' => [
-                'date' => $this->check_in_date,
-                'time' => $this->check_in_time,
-                'datetime' => optional($this->check_in_date . ' ' . $this->check_in_time),
-            ],
-            'check_out' => [
-                'date' => $this->check_out_date,
-                'time' => $this->check_out_time,
-                'datetime' => optional($this->check_out_date . ' ' . $this->check_out_time),
-            ],
-            'actual_check_in_datetime' => $this->actual_check_in_datetime,
-            'actual_check_out_datetime' => $this->actual_check_out_datetime,
-            'checked_in_by' => $this->checkedInBy?->full_name,
-            'checked_out_by' => $this->checkedOutBy?->full_name,
+            'facility_id' => $this->facility_id,
+            'facility' => $this->whenLoaded('facility', function() {
+                return [
+                    'id' => $this->facility->id,
+                    'name' => $this->facility->name,
+                    'facility_type' => [
+                        'id' => $this->facility->facilityType->id,
+                        'name' => $this->facility->facilityType->name,
+                    ],
+                ];
+            }),
+            'check_in_date' => $this->check_in_date?->format('Y-m-d'),
+            'check_out_date' => $this->check_out_date?->format('Y-m-d'),
+            'check_in_time' => $this->check_in_time,
+            'check_out_time' => $this->check_out_time,
+            'actual_check_in_datetime' => $this->actual_check_in_datetime?->toIso8601String(),
+            'checked_in_by' => $this->checked_in_by,
+            'checked_in_by_user' => $this->whenLoaded('checkedInBy', function() {
+                return $this->checkedInBy ? [
+                    'id' => $this->checkedInBy->id,
+                    'full_name' => $this->checkedInBy->full_name,
+                ] : null;
+            }),
+            'actual_check_out_datetime' => $this->actual_check_out_datetime?->toIso8601String(),
+            'checked_out_by' => $this->checked_out_by,
+            'checked_out_by_user' => $this->whenLoaded('checkedOutBy', function() {
+                return $this->checkedOutBy ? [
+                    'id' => $this->checkedOutBy->id,
+                    'full_name' => $this->checkedOutBy->full_name,
+                ] : null;
+            }),
             'number_of_guests' => $this->number_of_guests,
-            'guest_breakdown' => $this->guest_breakdown ? json_decode($this->guest_breakdown, true) : null,
+            'guest_breakdown' => $this->guest_breakdown,
             'booking_status' => $this->booking_status,
-            'subtotal' => number_format($this->subtotal, 2),
-            'discount_amount' => number_format($this->discount_amount, 2),
-            'total_amount' => number_format($this->total_amount, 2),
+            'subtotal' => (float) $this->subtotal,
+            'discount_amount' => (float) $this->discount_amount,
+            'third_party_service_amount' => (float) $this->third_party_service_amount,
+            'total_amount' => (float) $this->total_amount,
             'payment_status' => $this->payment_status,
-            'amount_paid' => number_format($this->amount_paid, 2),
-            'balance' => number_format($this->balance, 2),
+            'amount_paid' => (float) $this->amount_paid,
+            'balance' => (float) $this->balance,
             'notes' => $this->notes,
-            'created_by' => $this->creator?->full_name,
-            'created_at' => Carbon::parse($this->created_at)->toDateTimeString(),
-            'updated_at' => Carbon::parse($this->updated_at)->toDateTimeString(),
+            'created_by' => $this->created_by,
+            'created_by_user' => $this->whenLoaded('createdBy', function() {
+                return [
+                    'id' => $this->createdBy->id,
+                    'full_name' => $this->createdBy->full_name,
+                ];
+            }),
+            'payments' => $this->whenLoaded('payments', function() use ($request) {
+                return PaymentResource::collection($this->payments)->toArray($request);
+            }),
+            'created_at' => $this->created_at?->toIso8601String(),
+            'updated_at' => $this->updated_at?->toIso8601String(),
         ];
     }
 }

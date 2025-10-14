@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Foundation\Validation\ValidatesRequests;
 use Illuminate\Routing\Controller as BaseController;
+use App\Http\Resources\PaginatedResourceCollection;
 
 class Controller extends BaseController
 {
@@ -20,6 +21,13 @@ class Controller extends BaseController
             'message' => $message,
             'data' => $data,
         ], $code);
+    }
+
+    protected function paginatedCollection($paginator, $resourceClass)
+    {
+        $paginator->getCollection()->transform(fn($item) => new $resourceClass($item));
+
+        return new PaginatedResourceCollection($paginator);
     }
 
     /**

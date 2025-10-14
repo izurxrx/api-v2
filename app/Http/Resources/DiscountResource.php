@@ -2,11 +2,12 @@
 
 namespace App\Http\Resources;
 
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class DiscountResource extends JsonResource
 {
-    public function toArray($request)
+    public function toArray(Request $request): array
     {
         return [
             'id' => $this->id,
@@ -14,10 +15,15 @@ class DiscountResource extends JsonResource
             'description' => $this->description,
             'category' => $this->category,
             'type' => $this->type,
-            'value' => number_format($this->value, 2),
-            'is_guest_type_discount' => (bool)$this->is_guest_type_discount,
-            'valid_from' => $this->valid_from,
-            'valid_until' => $this->valid_until,
+            'value' => (float) $this->value,
+            'formatted_value' => $this->type === 'Percentage'
+                ? rtrim(rtrim(number_format($this->value, 2), '0'), '.') . '%'
+                : '₱' . number_format($this->value, 2),
+            'is_guest_type_discount' => (bool) $this->is_guest_type_discount,
+            'valid_from' => $this->valid_from?->format('Y-m-d'),
+            'valid_until' => $this->valid_until?->format('Y-m-d'),
+            'created_at' => $this->created_at?->toIso8601String(),
+            'updated_at' => $this->updated_at?->toIso8601String(),
         ];
     }
 }
