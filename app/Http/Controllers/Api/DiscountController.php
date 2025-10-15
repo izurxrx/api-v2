@@ -17,10 +17,6 @@ class DiscountController extends Controller
             $query->where('category', $request->category);
         }
 
-        if ($request->has('is_guest_type_discount')) {
-            $query->where('is_guest_type_discount', $request->boolean('is_guest_type_discount'));
-        }
-
         if ($request->has('active_only')) {
             $now = now();
             $query->where(function ($q) use ($now) {
@@ -30,6 +26,11 @@ class DiscountController extends Controller
                 $q->whereNull('valid_until')
                   ->orWhere('valid_until', '>=', $now);
             });
+        }
+
+        if ($request->has('search')) {
+            $search = $request->search;
+            $query->where('name', 'like', "%{$search}%");
         }
 
         $perPage = $request->input('per_page', 5);
@@ -46,10 +47,16 @@ class DiscountController extends Controller
             'category' => 'required|in:Seasonal_Discount,Direct_Discount',
             'type' => 'required|in:Percentage,Fixed_Amount',
             'value' => 'required|numeric|min:0',
-            'is_guest_type_discount' => 'boolean',
             'valid_from' => 'nullable|date',
             'valid_until' => 'nullable|date|after_or_equal:valid_from',
         ]);
+
+        // Validation: Percentage cannot exceed 100
+        if ($validated['type'] === 'Percentage' && $validated['value'] > 100) {
+            return response()->json([
+                'message' => 'Percentage discount cannot exceed 100%',
+            ], 422);
+        }
 
         $discount = Discount::create($validated);
 
@@ -78,10 +85,16 @@ class DiscountController extends Controller
             'category' => 'sometimes|in:Seasonal_Discount,Direct_Discount',
             'type' => 'sometimes|in:Percentage,Fixed_Amount',
             'value' => 'sometimes|numeric|min:0',
-            'is_guest_type_discount' => 'boolean',
             'valid_from' => 'nullable|date',
             'valid_until' => 'nullable|date|after_or_equal:valid_from',
         ]);
+
+        // Validation: Percentage cannot exceed 100
+        if (isset($validated['type']) && $validated['type'] === 'Percentage' && $validated['value'] > 100) {
+            return response()->json([
+                'message' => 'Percentage discount cannot exceed 100%',
+            ], 422);
+        }
 
         $discount->update($validated);
 
@@ -117,6 +130,5 @@ class DiscountController extends Controller
             'message' => 'Discount restored successfully',
             'data' => new DiscountResource($discount),
         ]);
-
     }
 }

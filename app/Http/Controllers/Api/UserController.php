@@ -104,38 +104,54 @@ class UserController extends Controller
         );
     }
 
-    public function update(Request $request, User $user)
+    public function update(Request $request, $id)
     {
+        // ✅ Find user manually
+        $user = User::findOrFail($id);
+
         $validated = $request->validate([
-            'username' => ['required','string','max:50', Rule::unique('users')->ignore($user->id)],
+            'username' => [
+                'required',
+                'string',
+                'max:50',
+                Rule::unique('users', 'username')->ignore($id) // ✅ Use $id directly
+            ],
             'full_name' => 'required|string|max:100',
             'contact_no' => 'nullable|string|max:20',
             'password' => 'nullable|string|min:6',
+            'role' => 'nullable|string|exists:roles,name',
         ]);
 
         $currentUser = auth()->user();
 
-        // Restrict Manager editing Admin
+        // Authorization checks
         if ($currentUser->isManager() && $user->isAdmin()) {
-            return response()->json(['message' => 'Managers cannot edit Admins.'], 422);
+            return response()->json(['message' => 'Managers cannot edit Admins.'], 403);
         }
 
-        // Restrict Staff editing Admin or Manager
         if ($currentUser->isStaff() && ($user->isAdmin() || $user->isManager())) {
-            return response()->json(['message' => 'Staff cannot edit Admins or Managers.'], 422);
+            return response()->json(['message' => 'Staff cannot edit Admins or Managers.'], 403);
         }
+
+        // Prepare update data
+        $updateData = [
+            'username' => $validated['username'],
+            'full_name' => $validated['full_name'],
+            'contact_no' => $validated['contact_no'] ?? null,
+        ];
 
         if (!empty($validated['password'])) {
-            $validated['password'] = Hash::make($validated['password']);
-        } else {
-            unset($validated['password']);
+            $updateData['password'] = Hash::make($validated['password']);
         }
 
-        $user->update($validated);
+        $user->update($updateData);
+
+        if (isset($validated['role']) && $currentUser->can('assign roles')) {
+            $user->syncRoles([$validated['role']]);
+        }
 
         return $this->successResponse(new UserResource($user->fresh()), 'User updated successfully');
     }
-
     public function destroy($id)
     {
         $user = User::withTrashed()->findOrFail($id);

@@ -26,11 +26,13 @@ class AuthController extends Controller
             ]);
         }
 
-        // Delete old tokens
-        $user->tokens()->delete();
+        // 🔐 Optional: Revoke all tokens if multiple sessions disabled
+        if (! config('sanctum.multiple_sessions', true)) {
+            $user->tokens()->delete();
+        }
 
-        // Create new token
-        $token = $user->createToken('auth-token')->plainTextToken;
+        // 🎟️ Create a new token
+        $plainToken = $user->createToken('auth-token')->plainTextToken;
 
         // Load relationships for response
         $user->load('roles.permissions');
@@ -38,7 +40,7 @@ class AuthController extends Controller
         return response()->json([
             'data' => [
                 'user' => new UserResource($user),
-                'token' => $token,
+                'token' => $plainToken,
             ],
         ]);
     }

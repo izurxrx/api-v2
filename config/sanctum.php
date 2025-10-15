@@ -81,4 +81,6 @@ return [
         'validate_csrf_token' => Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class,
     ],
 
+    'multiple_sessions' => env('SANCTUM_MULTIPLE_SESSIONS', true),
+
 ];

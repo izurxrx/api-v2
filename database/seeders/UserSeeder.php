@@ -11,8 +11,9 @@ class UserSeeder extends Seeder
     public function run(): void
     {
         // Admin User
-        $admin = User::create([
+        $admin = User::firstOrCreate([
             'username' => 'admin',
+        ], [
             'full_name' => 'System Administrator',
             'contact_no' => '+63 917 123 4567',
             'password' => Hash::make('admin123'),
@@ -20,35 +21,37 @@ class UserSeeder extends Seeder
         $admin->assignRole('Admin');
 
         // Manager User
-        $manager = User::create([
+        $manager = User::firstOrCreate([
             'username' => 'manager',
+        ], [
             'full_name' => 'Resort Manager',
             'contact_no' => '+63 918 234 5678',
             'password' => Hash::make('manager123'),
         ]);
         $manager->assignRole('Manager');
 
-        // Staff User 1
-        $staff1 = User::create([
+        // Staff Users
+        $staff1 = User::firstOrCreate([
             'username' => 'staff1',
+        ], [
             'full_name' => 'Front Desk Staff 1',
             'contact_no' => '+63 919 345 6789',
             'password' => Hash::make('staff123'),
         ]);
         $staff1->assignRole('Staff');
 
-        // Staff User 2
-        $staff2 = User::create([
+        $staff2 = User::firstOrCreate([
             'username' => 'staff2',
+        ], [
             'full_name' => 'Front Desk Staff 2',
             'contact_no' => '+63 920 456 7890',
             'password' => Hash::make('staff123'),
         ]);
         $staff2->assignRole('Staff');
 
-        $this->command->info('Users created successfully!');
-        $this->command->info('Admin - username: admin, password: admin123');
-        $this->command->info('Manager - username: manager, password: manager123');
-        $this->command->info('Staff - username: staff1/staff2, password: staff123');
+        $this->command->info('✅ Users created successfully!');
+        $this->command->info('Admin - admin / admin123');
+        $this->command->info('Manager - manager / manager123');
+        $this->command->info('Staff - staff1/staff2 / staff123');
     }
 }

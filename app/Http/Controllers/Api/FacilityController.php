@@ -27,6 +27,14 @@ class FacilityController extends Controller
         }
 
         $perPage = $request->input('per_page', 5);
+
+        if ($perPage == 'all' || (is_numeric($perPage) && (int)$perPage <= 0)) {
+            $facilities = $query->get();
+            return response()->json([
+                'data' => FacilityResource::collection($facilities),
+            ]);
+        }
+        
         $facilities = $query->paginate($perPage);
 
         return $this->paginatedCollection($facilities, FacilityResource::class);

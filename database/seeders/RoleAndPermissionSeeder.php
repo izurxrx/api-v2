@@ -21,54 +21,51 @@ class RoleAndPermissionSeeder extends Seeder
             'manage-staff-users',
             'manage-manager-users',
             'manage-admin-users',
-            
+
             // Booking Management
             'manage-bookings',
             'view-bookings',
             'check-in-guests',
-            
+
             // Guest Monitoring (Walk-ins)
             'process-walk-ins',
             'view-walk-ins',
             'checkout-walk-ins',
-            
+
             // Payments
             'process-payments',
             'view-payments',
-            
+
             // Facilities
             'manage-facilities',
             'view-facilities',
-            
+
             // Rates
             'manage-rates',
             'view-rates',
-            
+
             // Discounts
             'manage-discounts',
             'view-discounts',
-            
+
             // Reports
             'view-financial-reports',
             'generate-reports',
             'view-audit-logs',
-            
+
             // System
             'override-restrictions',
         ];
 
         foreach ($permissions as $permission) {
-            Permission::create(['name' => $permission, 'guard_name' => 'web']);
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'api']);
         }
 
         // Create roles and assign permissions
-        
-        // Admin Role - Full Access
-        $admin = Role::create(['name' => 'Admin', 'guard_name' => 'web']);
+        $admin = Role::firstOrCreate(['name' => 'Admin', 'guard_name' => 'api']);
         $admin->givePermissionTo(Permission::all());
 
-        // Manager Role - Most Access
-        $manager = Role::create(['name' => 'Manager', 'guard_name' => 'web']);
+        $manager = Role::firstOrCreate(['name' => 'Manager', 'guard_name' => 'api']);
         $manager->givePermissionTo([
             'view-users',
             'manage-staff-users',
@@ -92,8 +89,7 @@ class RoleAndPermissionSeeder extends Seeder
             'override-restrictions',
         ]);
 
-        // Staff Role - Operational Access
-        $staff = Role::create(['name' => 'Staff', 'guard_name' => 'web']);
+        $staff = Role::firstOrCreate(['name' => 'Staff', 'guard_name' => 'api']);
         $staff->givePermissionTo([
             'view-bookings',
             'check-in-guests',
@@ -107,6 +103,6 @@ class RoleAndPermissionSeeder extends Seeder
             'view-discounts',
         ]);
 
-        $this->command->info('Roles and Permissions created successfully!');
+        $this->command->info('✅ Roles and Permissions created successfully!');
     }
 }

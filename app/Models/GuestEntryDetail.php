@@ -15,7 +15,6 @@ class GuestEntryDetail extends Model
     protected $fillable = [
         'guest_entry_id',
         'rate_id',
-        'guest_type_id',
         'guest_count',
         'base_rate',
         'auto_discount_id',
@@ -54,11 +53,6 @@ class GuestEntryDetail extends Model
         return $this->belongsTo(Rate::class);
     }
 
-    public function guestType()
-    {
-        return $this->belongsTo(GuestType::class);
-    }
-
     public function autoDiscount()
     {
         return $this->belongsTo(Discount::class, 'auto_discount_id');
@@ -67,5 +61,12 @@ class GuestEntryDetail extends Model
     public function manualDiscount()
     {
         return $this->belongsTo(Discount::class, 'manual_discount_id');
+    }
+
+    // Helper method to calculate final rate and total
+    public function calculateAmounts()
+    {
+        $this->final_rate = $this->base_rate - $this->auto_discount_amount - $this->manual_discount_amount;
+        $this->total_amount = $this->final_rate * $this->guest_count;
     }
 }

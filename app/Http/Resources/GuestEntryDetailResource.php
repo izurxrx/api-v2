@@ -21,13 +21,6 @@ class GuestEntryDetailResource extends JsonResource
                     'base_price' => (float) $this->rate->base_price,
                 ];
             }),
-            'guest_type_id' => $this->guest_type_id,
-            'guest_type' => $this->whenLoaded('guestType', function() {
-                return [
-                    'id' => $this->guestType->id,
-                    'name' => $this->guestType->name,
-                ];
-            }),
             'guest_count' => $this->guest_count,
             'base_rate' => (float) $this->base_rate,
             'auto_discount_id' => $this->auto_discount_id,

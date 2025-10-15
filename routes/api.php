@@ -11,10 +11,18 @@ use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\RateController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\UserController;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Support\Facades\Route;
 
-Route::post('/login', [AuthController::class, 'login']);
-Route::get('/facilities-test', [FacilityController::class, 'test']);
+RateLimiter::for('login', function (Request $request) {
+    $key = sprintf('login:%s|%s', $request->username ?? 'guest', $request->ip());
+    return Limit::perMinute(5)->by($key);
+});
+
+Route::middleware('throttle:login')->group(function () {
+    Route::post('/login', [AuthController::class, 'login']);
+});
 
 Route::middleware('auth:sanctum')->group(function () {
     

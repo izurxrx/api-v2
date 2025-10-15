@@ -9,7 +9,6 @@ use App\Models\Facility;
 use App\Models\GuestEntry;
 use App\Models\GuestEntryDetail;
 use App\Models\GuestEntryFacility;
-use App\Models\GuestType;
 use App\Models\Rate;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,8 +21,9 @@ class GuestMonitoringController extends Controller
     public function index(Request $request)
     {
         $query = GuestEntry::with([
-            'details.guestType',
             'details.rate',
+            'details.autoDiscount',
+            'details.manualDiscount',
             'facilities.facility.facilityType',
             'createdBy',
         ]);
@@ -72,11 +72,11 @@ class GuestMonitoringController extends Controller
             'entry_time' => 'nullable|date_format:H:i',
             'notes' => 'nullable|string',
             
-            // Guest details array
+            // Guest details array (guest groups)
             'guests' => 'required|array|min:1',
-            'guests.*.guest_type_id' => 'required|exists:guest_types,id',
             'guests.*.rate_id' => 'required|exists:rates,id',
             'guests.*.guest_count' => 'required|integer|min:1',
+            'guests.*.auto_discount_id' => 'nullable|exists:discounts,id',
             'guests.*.manual_discount_id' => 'nullable|exists:discounts,id',
             
             // Facility rentals array (optional)
@@ -136,7 +136,6 @@ class GuestMonitoringController extends Controller
 
             // Load relationships for response
             $guestEntry->load([
-                'details.guestType',
                 'details.rate',
                 'details.autoDiscount',
                 'details.manualDiscount',
@@ -165,7 +164,6 @@ class GuestMonitoringController extends Controller
     public function show($id)
     {
         $entry = GuestEntry::with([
-            'details.guestType',
             'details.rate',
             'details.autoDiscount',
             'details.manualDiscount',
@@ -202,7 +200,9 @@ class GuestMonitoringController extends Controller
         }
 
         $entry->load([
-            'details.guestType',
+            'details.rate',
+            'details.autoDiscount',
+            'details.manualDiscount',
             'facilities.facility',
             'createdBy',
         ]);
@@ -251,7 +251,9 @@ class GuestMonitoringController extends Controller
             DB::commit();
 
             $entry->load([
-                'details.guestType',
+                'details.rate',
+                'details.autoDiscount',
+                'details.manualDiscount',
                 'facilities.facility',
                 'payments',
             ]);
@@ -284,7 +286,7 @@ class GuestMonitoringController extends Controller
     }
 
     // ============================================
-    // HELPER METHODS
+    // HELPER METHODS - UPDATED
     // ============================================
 
     private function generateReferenceNumber()
@@ -294,37 +296,31 @@ class GuestMonitoringController extends Controller
         return 'EN' . $date . str_pad($count, 3, '0', STR_PAD_LEFT);
     }
 
+    /**
+     * Create guest detail without guest_type_id
+     * Discounts are now explicitly provided
+     */
     private function createGuestDetail($guestEntryId, array $guestData)
     {
         $rate = Rate::findOrFail($guestData['rate_id']);
-        $guestType = GuestType::with('defaultDiscount')->findOrFail($guestData['guest_type_id']);
-
         $baseRate = $rate->base_price;
-        $autoDiscountId = null;
+        
+        $autoDiscountId = $guestData['auto_discount_id'] ?? null;
         $autoDiscountAmount = 0;
 
-        // Apply automatic discount if guest type has one
-        if ($guestType->defaultDiscount) {
-            $autoDiscountId = $guestType->defaultDiscount->id;
-            if ($guestType->defaultDiscount->type === 'Percentage') {
-                $autoDiscountAmount = ($baseRate * $guestType->defaultDiscount->value) / 100;
-            } else {
-                $autoDiscountAmount = $guestType->defaultDiscount->value;
-            }
+        // Apply automatic discount if provided (e.g., Senior Citizen, PWD)
+        if ($autoDiscountId) {
+            $autoDiscount = Discount::findOrFail($autoDiscountId);
+            $autoDiscountAmount = $autoDiscount->calculateDiscountAmount($baseRate);
         }
 
-        // Apply manual discount if provided
+        // Apply manual discount if provided (additional promotional discounts)
         $manualDiscountId = $guestData['manual_discount_id'] ?? null;
         $manualDiscountAmount = 0;
         if ($manualDiscountId) {
             $manualDiscount = Discount::findOrFail($manualDiscountId);
             $rateAfterAuto = $baseRate - $autoDiscountAmount;
-            
-            if ($manualDiscount->type === 'Percentage') {
-                $manualDiscountAmount = ($rateAfterAuto * $manualDiscount->value) / 100;
-            } else {
-                $manualDiscountAmount = $manualDiscount->value;
-            }
+            $manualDiscountAmount = $manualDiscount->calculateDiscountAmount($rateAfterAuto);
         }
 
         $finalRate = $baseRate - $autoDiscountAmount - $manualDiscountAmount;
@@ -333,7 +329,6 @@ class GuestMonitoringController extends Controller
         return GuestEntryDetail::create([
             'guest_entry_id' => $guestEntryId,
             'rate_id' => $rate->id,
-            'guest_type_id' => $guestType->id,
             'guest_count' => $guestData['guest_count'],
             'base_rate' => $baseRate,
             'auto_discount_id' => $autoDiscountId,
@@ -395,14 +390,16 @@ class GuestMonitoringController extends Controller
     public function archived()
     {
         $entries = GuestEntry::onlyTrashed()->with([
-            'details.guestType',
             'details.rate',
+            'details.autoDiscount',
+            'details.manualDiscount',
             'facilities.facility.facilityType',
             'createdBy',
         ])->paginate(5);
 
         return $this->paginatedCollection($entries, GuestEntryResource::class);
     }
+
     public function restore($id)
     {
         $entry = GuestEntry::onlyTrashed()->findOrFail($id);

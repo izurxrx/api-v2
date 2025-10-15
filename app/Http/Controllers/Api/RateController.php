@@ -13,27 +13,22 @@ class RateController extends Controller
     {
         $query = Rate::with('facility.facilityType');
 
-        //Filter by facility
         if ($request->has('facility_id')) {
             $query->where('facility_id', $request->facility_id);
         }
 
-        //Filter by rate category
         if ($request->has('rate_category')) {
             $query->where('rate_category', $request->rate_category);
         }
 
-        //Filter by rate type
         if ($request->has('rate_type')) {
             $query->where('rate_type', $request->rate_type);
         }
         
-        //Sorting
         $sortBy = $request->get('sort_by', 'created_at');
         $sortOrder = $request->get('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
 
-        //Pagination
         $perPage = $request->input('per_page', 5);
         $rates = $query->paginate($perPage);
 

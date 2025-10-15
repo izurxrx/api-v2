@@ -19,9 +19,9 @@ class DiscountResource extends JsonResource
             'formatted_value' => $this->type === 'Percentage'
                 ? rtrim(rtrim(number_format($this->value, 2), '0'), '.') . '%'
                 : '₱' . number_format($this->value, 2),
-            'is_guest_type_discount' => (bool) $this->is_guest_type_discount,
             'valid_from' => $this->valid_from?->format('Y-m-d'),
             'valid_until' => $this->valid_until?->format('Y-m-d'),
+            'is_valid' => $this->isValid(),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];
