@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\FacilityType\StoreFacilityTypeRequest;
+use App\Http\Requests\FacilityType\UpdateFacilityTypeRequest;
 use App\Http\Resources\FacilityTypeResource;
 use App\Models\FacilityType;
 use Illuminate\Http\Request;
@@ -20,16 +22,15 @@ class FacilityTypeController extends Controller
         $perPage = $request->input('per_page', 5);
         $facilityTypes = $query->paginate($perPage);
 
-        return $this->paginatedCollection($facilityTypes, FacilityTypeResource::class);
+        return FacilityTypeResource::collection($facilityTypes)->additional([
+            'status' => 'success',
+            'message' => 'Facility types retrieved successfully',
+        ]);
     }
 
-    public function store(Request $request)
+    public function store(StoreFacilityTypeRequest $request)
     {
-        $validated = $request->validate([
-            'name' => 'required|string|max:100|unique:facility_types,name',
-            'description' => 'nullable|string',
-        ]);
-
+        $validated = $request->validated();
         $facilityType = FacilityType::create($validated);
 
         return response()->json([
@@ -47,14 +48,10 @@ class FacilityTypeController extends Controller
         ]);
     }
 
-    public function update(Request $request, $id)
+    public function update(UpdateFacilityTypeRequest $request, $id)
     {
         $facilityType = FacilityType::findOrFail($id);
-
-        $validated = $request->validate([
-            'name' => 'sometimes|string|max:100|unique:facility_types,name,' . $id,
-            'description' => 'nullable|string',
-        ]);
+        $validated = $request->validated();
 
         $facilityType->update($validated);
 
@@ -68,7 +65,6 @@ class FacilityTypeController extends Controller
     {
         $facilityType = FacilityType::findOrFail($id);
         
-        // Check if has facilities
         if ($facilityType->facilities()->count() > 0) {
             return response()->json([
                 'message' => 'Cannot delete facility type with existing facilities',
@@ -86,7 +82,10 @@ class FacilityTypeController extends Controller
     {
         $facilityTypes = FacilityType::onlyTrashed()->withCount('facilities')->paginate(5);
 
-        return $this->paginatedCollection($facilityTypes, FacilityTypeResource::class);
+        return FacilityTypeResource::collection($facilityTypes)->additional([
+            'status' => 'success',
+            'message' => 'Archived facility types retrieved successfully',
+        ]);
     }
 
     public function restore($id)

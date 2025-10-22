@@ -1,12 +1,12 @@
 <?php
 
+use App\Http\Controllers\Api\FacilityAvailabilityController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BookingController;
 use App\Http\Controllers\Api\DiscountController;
 use App\Http\Controllers\Api\FacilityController;
 use App\Http\Controllers\Api\FacilityTypeController;
 use App\Http\Controllers\Api\GuestMonitoringController;
-use App\Http\Controllers\Api\GuestTypeController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\RateController;
 use App\Http\Controllers\Api\RoleController;
@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Http\Request;
 
 RateLimiter::for('login', function (Request $request) {
     $key = sprintf('login:%s|%s', $request->username ?? 'guest', $request->ip());
@@ -28,12 +29,18 @@ Route::middleware('auth:sanctum')->group(function () {
     
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
-    
+
+    // ========================================
+    // BOOKINGS
+    // ========================================
     Route::prefix('booking')->group(function () {
         Route::get('/', [BookingController::class, 'index'])
             ->middleware('permission:view-bookings');
         
         Route::post('/', [BookingController::class, 'store'])
+            ->middleware('permission:manage-bookings');
+
+        Route::get('/archived', [BookingController::class, 'archived'])
             ->middleware('permission:manage-bookings');
 
         Route::get('/{id}', [BookingController::class, 'show'])
@@ -45,9 +52,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/{id}', [BookingController::class, 'destroy'])
             ->middleware('permission:manage-bookings');
 
-        Route::get('/archived', [BookingController::class, 'archived'])
-            ->middleware('permission:manage-bookings');
-
         Route::post('/{id}/restore', [BookingController::class, 'restore'])
             ->middleware('permission:manage-bookings');
 
@@ -56,14 +60,23 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::post('/{id}/check-out', [BookingController::class, 'checkOut'])
             ->middleware('permission:manage-bookings');
+
+        Route::post('/{id}/cancel', [BookingController::class, 'cancel'])
+            ->middleware('permission:manage-bookings');
     });
 
+    // ========================================
+    // GUEST MONITORING (Walk-ins)
+    // ========================================
     Route::prefix('guest-monitoring')->group(function () {
         Route::get('/', [GuestMonitoringController::class, 'index'])
             ->middleware('permission:view-walk-ins');
         
         Route::post('/', [GuestMonitoringController::class, 'store'])
             ->middleware('permission:process-walk-ins');
+
+        Route::get('/archived', [GuestMonitoringController::class, 'archived'])
+            ->middleware('permission:manage-walk-ins');
         
         Route::get('/{id}', [GuestMonitoringController::class, 'show'])
             ->middleware('permission:view-walk-ins');
@@ -77,21 +90,29 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/{id}', [GuestMonitoringController::class, 'destroy'])
             ->middleware('permission:process-walk-ins');
 
-        Route::get('/archived', [GuestMonitoringController::class, 'archived'])
-            ->middleware('permission:manage-walk-ins');
-
         Route::post('/{id}/restore', [GuestMonitoringController::class, 'restore'])
             ->middleware('permission:manage-walk-ins');
     });
-    
+
+    // ========================================
+    // FACILITIES (MERGED: CRUD + Availability)
+    // ========================================
     Route::prefix('facilities')->group(function () {
+        // ✅ AVAILABILITY ROUTES (Must come BEFORE {id} routes!)
+        Route::post('/check-availability', [FacilityAvailabilityController::class, 'checkMultipleFacilities']);
+        Route::get('/walk-in', [FacilityController::class, 'getWalkInFacilities']);
+        Route::get('/archived', [FacilityController::class, 'archived'])
+            ->middleware('permission:manage-facilities');
+        
+        // ✅ SPECIFIC FACILITY AVAILABILITY
+        Route::get('/{facilityId}/availability', [FacilityAvailabilityController::class, 'checkAvailability']);
+        Route::get('/{facilityId}/conflicts', [FacilityAvailabilityController::class, 'getConflicts']);
+        
+        // ✅ FACILITY CRUD
         Route::get('/', [FacilityController::class, 'index'])
             ->middleware('permission:view-facilities');
         
         Route::post('/', [FacilityController::class, 'store'])
-            ->middleware('permission:manage-facilities');
-        
-        Route::get('/archived', [FacilityController::class, 'archived'])
             ->middleware('permission:manage-facilities');
         
         Route::get('/{id}', [FacilityController::class, 'show'])
@@ -107,6 +128,9 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:manage-facilities');
     });
     
+    // ========================================
+    // RATES
+    // ========================================
     Route::prefix('rates')->group(function () {
         Route::get('/', [RateController::class, 'index'])
             ->middleware('permission:view-rates');
@@ -130,6 +154,9 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:manage-rates');
     });
     
+    // ========================================
+    // DISCOUNTS
+    // ========================================
     Route::prefix('discounts')->group(function () {
         Route::get('/', [DiscountController::class, 'index'])
             ->middleware('permission:view-discounts');
@@ -153,11 +180,9 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:manage-discounts');
     });
     
-    Route::prefix('guest-types')->group(function () {
-        Route::get('/', [GuestTypeController::class, 'index']);
-        Route::get('/{id}', [GuestTypeController::class, 'show']);
-    });
-    
+    // ========================================
+    // FACILITY TYPES
+    // ========================================
     Route::prefix('facility-types')->group(function () {
         Route::get('/', [FacilityTypeController::class, 'index'])
             ->middleware('permission:view-facilities');
@@ -181,6 +206,9 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:manage-facilities');
     });
     
+    // ========================================
+    // PAYMENTS
+    // ========================================
     Route::prefix('payments')->group(function () {
         Route::get('/', [PaymentController::class, 'index'])
             ->middleware('permission:view-payments');
@@ -195,6 +223,9 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:process-payments');
     });
     
+    // ========================================
+    // USERS
+    // ========================================
     Route::prefix('users')->group(function () {
         Route::get('/', [UserController::class, 'index'])
             ->middleware('permission:view-users');
@@ -218,6 +249,9 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:manage-users');
     });
 
+    // ========================================
+    // ROLES
+    // ========================================
     Route::prefix('roles')->group(function () {
         Route::get('/', [RoleController::class, 'index'])
             ->middleware('permission:manage-users');

@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Facility\StoreFacilityRequest;
+use App\Http\Requests\Facility\UpdateFacilityRequest;
 use App\Http\Resources\FacilityResource;
 use App\Models\Facility;
 use Illuminate\Http\Request;
@@ -15,6 +17,16 @@ class FacilityController extends Controller
 
         if ($request->has('facility_type_id')) {
             $query->where('facility_type_id', $request->facility_type_id);
+        }
+
+        // ADD THIS: Filter by booking type
+        if ($request->has('booking_type')) {
+            $query->where('booking_type', $request->booking_type);
+        }
+
+        // ADD THIS: Get only walk-in cottages
+        if ($request->has('walk_in_only')) {
+            $query->availableForWalkIn();
         }
 
         if ($request->has('available')) {
@@ -37,22 +49,15 @@ class FacilityController extends Controller
         
         $facilities = $query->paginate($perPage);
 
-        return $this->paginatedCollection($facilities, FacilityResource::class);
+        return FacilityResource::collection($facilities)->additional([
+            'status' => 'success',
+            'message' => 'Facilities retrieved successfully',
+        ]);
     }
 
-    public function store(Request $request)
+    public function store(StoreFacilityRequest $request)
     {
-        $validated = $request->validate([
-            'facility_type_id' => 'required|exists:facility_types,id',
-            'name' => 'required|string|max:100',
-            'quantity' => 'required|integer|min:1',
-            'expected_capacity' => 'required|integer|min:0',
-            'max_capacity' => 'required|integer|min:0',
-            'description' => 'nullable|string',
-            'is_maintenance' => 'boolean',
-            'is_available_for_booking' => 'boolean',
-        ]);
-
+        $validated = $request->validated();
         $facility = Facility::create($validated);
         $facility->load('facilityType');
 
@@ -71,20 +76,10 @@ class FacilityController extends Controller
         ]);
     }
 
-    public function update(Request $request, $id)
+    public function update(UpdateFacilityRequest $request, $id)
     {
         $facility = Facility::findOrFail($id);
-
-        $validated = $request->validate([
-            'facility_type_id' => 'sometimes|exists:facility_types,id',
-            'name' => 'sometimes|string|max:100',
-            'quantity' => 'sometimes|integer|min:1',
-            'expected_capacity' => 'sometimes|integer|min:0',
-            'max_capacity' => 'sometimes|integer|min:0',
-            'description' => 'nullable|string',
-            'is_maintenance' => 'boolean',
-            'is_available_for_booking' => 'boolean',
-        ]);
+        $validated = $request->validated();
 
         $facility->update($validated);
         $facility->load('facilityType');
@@ -109,17 +104,32 @@ class FacilityController extends Controller
     {
         $facilities = Facility::onlyTrashed()->with('facilityType')->paginate(5);
 
-        return $this->paginatedCollection($facilities, FacilityResource::class);
+        return FacilityResource::collection($facilities)->additional([
+            'status' => 'success',
+            'message' => 'Archived facilities retrieved successfully',
+        ]);
     }
 
     public function restore($id)
     {
         $facility = Facility::onlyTrashed()->findOrFail($id);
-
         $facility->restore();
+        
         return response()->json([
             'message' => 'Facility restored successfully',
             'data' => new FacilityResource($facility),
+        ]);
+    }
+
+    // ADD THIS NEW METHOD
+    public function getWalkInFacilities()
+    {
+        $facilities = Facility::with('facilityType', 'rates')
+            ->availableForWalkIn()
+            ->get();
+
+        return response()->json([
+            'data' => FacilityResource::collection($facilities),
         ]);
     }
 }

@@ -14,6 +14,7 @@ class Facility extends Model
 
     protected $fillable = [
         'facility_type_id',
+        'booking_type',
         'name',
         'quantity',
         'expected_capacity',

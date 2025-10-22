@@ -3,10 +3,11 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\User;
+use App\Http\Requests\User\StoreUserRequest;
+use App\Http\Requests\User\UpdateUserRequest;
 use App\Http\Resources\UserResource;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\Rule;
 use App\Http\Controllers\Controller;
 
 class UserController extends Controller
@@ -15,7 +16,6 @@ class UserController extends Controller
     {
         $query = User::onlyTrashed();
 
-        //Search
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
@@ -25,12 +25,10 @@ class UserController extends Controller
             });
         }
 
-        //Filter by role
         if ($request->filled('role')) {
             $query->role($request->role);
         }
 
-        //Sorting
         $sortBy = $request->get('sort_by', 'created_at');
         $sortOrder = $request->get('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
@@ -38,7 +36,10 @@ class UserController extends Controller
         $perPage = (int) $request->get('per_page', 5);
         $users = $query->paginate($perPage);
 
-        return $this->paginatedCollection($users, UserResource::class);
+        return UserResource::collection($users)->additional([
+            'status' => 'success',
+            'message' => 'Archived users retrieved successfully',
+        ]);
     }
     
     public function index(Request $request)
@@ -65,20 +66,16 @@ class UserController extends Controller
         $perPage = (int) $request->get('per_page', 5);
         $users = $query->paginate($perPage);
 
-        return $this->paginatedCollection($users, UserResource::class);
+        return UserResource::collection($users)->additional([
+            'status' => 'success',
+            'message' => 'Users retrieved successfully',
+        ]);
     }
 
-    public function store(Request $request)
+    public function store(StoreUserRequest $request)
     {
-        $validated = $request->validate([
-            'username' => 'required|string|max:50|unique:users',
-            'full_name' => 'required|string|max:100',
-            'contact_no' => 'nullable|string|max:20',
-            'password' => 'required|string|min:6',
-            'role' => 'required|string|exists:roles,name',
-        ]);
-        
-        $role = $request->input('role');
+        $validated = $request->validated();
+        $role = $validated['role'];
 
         if ($role === 'Admin' && User::role('Admin')->exists()) {
             return response()->json(['message' => 'Cannot create another Admin.'], 422);
@@ -95,7 +92,6 @@ class UserController extends Controller
         return $this->successResponse(new UserResource($user), 'User created successfully', 201);
     }
 
-
     public function show(User $user)
     {
         return $this->successResponse(
@@ -104,27 +100,12 @@ class UserController extends Controller
         );
     }
 
-    public function update(Request $request, $id)
+    public function update(UpdateUserRequest $request, $id)
     {
-        // ✅ Find user manually
         $user = User::findOrFail($id);
-
-        $validated = $request->validate([
-            'username' => [
-                'required',
-                'string',
-                'max:50',
-                Rule::unique('users', 'username')->ignore($id) // ✅ Use $id directly
-            ],
-            'full_name' => 'required|string|max:100',
-            'contact_no' => 'nullable|string|max:20',
-            'password' => 'nullable|string|min:6',
-            'role' => 'nullable|string|exists:roles,name',
-        ]);
-
+        $validated = $request->validated();
         $currentUser = auth()->user();
 
-        // Authorization checks
         if ($currentUser->isManager() && $user->isAdmin()) {
             return response()->json(['message' => 'Managers cannot edit Admins.'], 403);
         }
@@ -133,7 +114,6 @@ class UserController extends Controller
             return response()->json(['message' => 'Staff cannot edit Admins or Managers.'], 403);
         }
 
-        // Prepare update data
         $updateData = [
             'username' => $validated['username'],
             'full_name' => $validated['full_name'],
@@ -152,6 +132,7 @@ class UserController extends Controller
 
         return $this->successResponse(new UserResource($user->fresh()), 'User updated successfully');
     }
+
     public function destroy($id)
     {
         $user = User::withTrashed()->findOrFail($id);

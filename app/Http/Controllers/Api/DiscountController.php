@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Discount\StoreDiscountRequest;
+use App\Http\Requests\Discount\UpdateDiscountRequest;
 use App\Http\Resources\DiscountResource;
 use App\Models\Discount;
 use Illuminate\Http\Request;
@@ -36,28 +38,15 @@ class DiscountController extends Controller
         $perPage = $request->input('per_page', 5);
         $discounts = $query->paginate($perPage);
 
-        return $this->paginatedCollection($discounts, DiscountResource::class);
+        return DiscountResource::collection($discounts)->additional([
+            'status' => 'success',
+            'message' => 'Discounts retrieved successfully',
+        ]);
     }
 
-    public function store(Request $request)
+    public function store(StoreDiscountRequest $request)
     {
-        $validated = $request->validate([
-            'name' => 'required|string|max:100',
-            'description' => 'nullable|string',
-            'category' => 'required|in:Seasonal_Discount,Direct_Discount',
-            'type' => 'required|in:Percentage,Fixed_Amount',
-            'value' => 'required|numeric|min:0',
-            'valid_from' => 'nullable|date',
-            'valid_until' => 'nullable|date|after_or_equal:valid_from',
-        ]);
-
-        // Validation: Percentage cannot exceed 100
-        if ($validated['type'] === 'Percentage' && $validated['value'] > 100) {
-            return response()->json([
-                'message' => 'Percentage discount cannot exceed 100%',
-            ], 422);
-        }
-
+        $validated = $request->validated();
         $discount = Discount::create($validated);
 
         return response()->json([
@@ -75,26 +64,10 @@ class DiscountController extends Controller
         ]);
     }
 
-    public function update(Request $request, $id)
+    public function update(UpdateDiscountRequest $request, $id)
     {
         $discount = Discount::findOrFail($id);
-
-        $validated = $request->validate([
-            'name' => 'sometimes|string|max:100',
-            'description' => 'nullable|string',
-            'category' => 'sometimes|in:Seasonal_Discount,Direct_Discount',
-            'type' => 'sometimes|in:Percentage,Fixed_Amount',
-            'value' => 'sometimes|numeric|min:0',
-            'valid_from' => 'nullable|date',
-            'valid_until' => 'nullable|date|after_or_equal:valid_from',
-        ]);
-
-        // Validation: Percentage cannot exceed 100
-        if (isset($validated['type']) && $validated['type'] === 'Percentage' && $validated['value'] > 100) {
-            return response()->json([
-                'message' => 'Percentage discount cannot exceed 100%',
-            ], 422);
-        }
+        $validated = $request->validated();
 
         $discount->update($validated);
 
@@ -118,7 +91,10 @@ class DiscountController extends Controller
     {
         $discounts = Discount::onlyTrashed()->paginate(5);
 
-        return $this->paginatedCollection($discounts, DiscountResource::class);
+        return DiscountResource::collection($discounts)->additional([
+            'status' => 'success',
+            'message' => 'Archived discounts retrieved successfully',
+        ]);
     }
 
     public function restore($id)

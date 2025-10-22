@@ -21,7 +21,7 @@ class DiscountResource extends JsonResource
                 : '₱' . number_format($this->value, 2),
             'valid_from' => $this->valid_from?->format('Y-m-d'),
             'valid_until' => $this->valid_until?->format('Y-m-d'),
-            'is_valid' => $this->isValid(),
+            'is_active' => $this->isActive(),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

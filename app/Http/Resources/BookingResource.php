@@ -14,21 +14,72 @@ class BookingResource extends JsonResource
             'booking_reference' => $this->booking_reference,
             'guest_name' => $this->guest_name,
             'contact_number' => $this->contact_number,
+            
+            // Datetime fields (new structure)
+            'check_in_datetime' => $this->check_in_datetime?->toIso8601String(),
+            'check_out_datetime' => $this->check_out_datetime?->toIso8601String(),
+            'duration_hours' => $this->duration_hours,
+            
+            // Backward compatibility (old structure)
             'facility_id' => $this->facility_id,
             'facility' => $this->whenLoaded('facility', function() {
-                return [
+                return $this->facility ? [
                     'id' => $this->facility->id,
                     'name' => $this->facility->name,
                     'facility_type' => [
                         'id' => $this->facility->facilityType->id,
                         'name' => $this->facility->facilityType->name,
                     ],
-                ];
+                ] : null;
             }),
             'check_in_date' => $this->check_in_date?->format('Y-m-d'),
             'check_out_date' => $this->check_out_date?->format('Y-m-d'),
             'check_in_time' => $this->check_in_time,
             'check_out_time' => $this->check_out_time,
+            
+            // Multi-facility support (NEW)
+            'facilities' => $this->whenLoaded('facilities', function() {
+                return $this->facilities->map(function($bookingFacility) {
+                    return [
+                        'id' => $bookingFacility->id,
+                        'facility_id' => $bookingFacility->facility_id,
+                        'facility' => $bookingFacility->facility ? [
+                            'id' => $bookingFacility->facility->id,
+                            'name' => $bookingFacility->facility->name,
+                            'quantity' => $bookingFacility->facility->quantity,
+                            'facility_type' => $bookingFacility->facility->facilityType ? [
+                                'id' => $bookingFacility->facility->facilityType->id,
+                                'name' => $bookingFacility->facility->facilityType->name,
+                            ] : null,
+                        ] : null,
+                        'rate_id' => $bookingFacility->rate_id,
+                        'rate' => $bookingFacility->rate ? [
+                            'id' => $bookingFacility->rate->id,
+                            'rate_name' => $bookingFacility->rate->rate_name,
+                            'duration' => $bookingFacility->rate->duration,
+                            'base_price' => (float) $bookingFacility->rate->base_price,
+                        ] : null,
+                        'start_datetime' => $bookingFacility->start_datetime?->toIso8601String(),
+                        'end_datetime' => $bookingFacility->end_datetime?->toIso8601String(),
+                        'duration_hours' => $bookingFacility->duration_hours,
+                        'base_amount' => (float) $bookingFacility->base_amount,
+                        'quantity' => $bookingFacility->quantity,
+                    ];
+                });
+            }),
+            
+            // Third-party services (NEW)
+            'third_party_services' => $this->whenLoaded('thirdPartyServices', function() {
+                return $this->thirdPartyServices->map(function($service) {
+                    return [
+                        'id' => $service->id,
+                        'service_name' => $service->service_name,
+                        'amount' => (float) $service->amount,
+                    ];
+                });
+            }),
+            
+            // Check-in/out tracking
             'actual_check_in_datetime' => $this->actual_check_in_datetime?->toIso8601String(),
             'checked_in_by' => $this->checked_in_by,
             'checked_in_by_user' => $this->whenLoaded('checkedInBy', function() {
@@ -45,17 +96,36 @@ class BookingResource extends JsonResource
                     'full_name' => $this->checkedOutBy->full_name,
                 ] : null;
             }),
+            
+            // Guest information
             'number_of_guests' => $this->number_of_guests,
             'guest_breakdown' => $this->guest_breakdown,
+            
+            // Status
             'booking_status' => $this->booking_status,
-            'subtotal' => (float) $this->subtotal,
-            'discount_amount' => (float) $this->discount_amount,
+            'cancellation_deadline' => $this->cancellation_deadline?->toIso8601String(),
+            'cancellation_reason' => $this->cancellation_reason,
+            
+            // Amounts
+            'facility_subtotal' => (float) $this->facility_subtotal,
             'third_party_service_amount' => (float) $this->third_party_service_amount,
+            'subtotal' => (float) $this->subtotal,
             'total_amount' => (float) $this->total_amount,
             'payment_status' => $this->payment_status,
             'amount_paid' => (float) $this->amount_paid,
             'balance' => (float) $this->balance,
+            
+            // Calculated fields
+            'minimum_deposit' => (float) ($this->total_amount * 0.5),
+            'can_be_cancelled' => $this->canBeCancelled(),
+            'requires_payment' => $this->requiresPayment(),
+            'has_minimum_deposit' => $this->hasMinimumDeposit(),
+            
+            // Notes
+            'special_requests' => $this->special_requests,
             'notes' => $this->notes,
+            
+            // Created by
             'created_by' => $this->created_by,
             'created_by_user' => $this->whenLoaded('createdBy', function() {
                 return [
@@ -63,11 +133,16 @@ class BookingResource extends JsonResource
                     'full_name' => $this->createdBy->full_name,
                 ];
             }),
+            
+            // Payments
             'payments' => $this->whenLoaded('payments', function() use ($request) {
                 return PaymentResource::collection($this->payments)->toArray($request);
             }),
+            
+            // Timestamps
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
+            'deleted_at' => $this->deleted_at?->toIso8601String(),
         ];
     }
 }

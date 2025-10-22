@@ -12,6 +12,7 @@ class GuestEntryDetailResource extends JsonResource
         return [
             'id' => $this->id,
             'guest_entry_id' => $this->guest_entry_id,
+            'guest_type_name' => $this->guest_type_name,
             'rate_id' => $this->rate_id,
             'rate' => $this->whenLoaded('rate', function() {
                 return [
@@ -23,30 +24,21 @@ class GuestEntryDetailResource extends JsonResource
             }),
             'guest_count' => $this->guest_count,
             'base_rate' => (float) $this->base_rate,
-            'auto_discount_id' => $this->auto_discount_id,
-            'auto_discount' => $this->whenLoaded('autoDiscount', function() {
-                return $this->autoDiscount ? [
-                    'id' => $this->autoDiscount->id,
-                    'name' => $this->autoDiscount->name,
-                    'type' => $this->autoDiscount->type,
-                    'value' => (float) $this->autoDiscount->value,
+            'discount_mode' => $this->discount_mode,
+            'discount_id' => $this->discount_id,
+            'discount' => $this->whenLoaded('discount', function() {  // ✅ Change from autoDiscount
+                return $this->discount ? [
+                    'id' => $this->discount->id,
+                    'name' => $this->discount->name,
+                    'type' => $this->discount->type,
+                    'value' => (float) $this->discount->value,
                 ] : null;
             }),
-            'auto_discount_amount' => (float) $this->auto_discount_amount,
-            'manual_discount_id' => $this->manual_discount_id,
-            'manual_discount' => $this->whenLoaded('manualDiscount', function() {
-                return $this->manualDiscount ? [
-                    'id' => $this->manualDiscount->id,
-                    'name' => $this->manualDiscount->name,
-                    'type' => $this->manualDiscount->type,
-                    'value' => (float) $this->manualDiscount->value,
-                ] : null;
-            }),
-            'manual_discount_amount' => (float) $this->manual_discount_amount,
+            'discount_amount' => (float) $this->discount_amount,
             'final_rate' => (float) $this->final_rate,
             'total_amount' => (float) $this->total_amount,
             'created_at' => $this->created_at?->toIso8601String(),
-            'updated_at' => $this->updated_at?->toIso8601String(),
+            'updated_at' => $this->updated_at?->diffForHumans(),
         ];
     }
 }

@@ -16,11 +16,16 @@ class GuestEntry extends Model
         'entry_reference',
         'entry_date',
         'entry_time',
+        'check_in_datetime',
+        'discount_mode',
+        'discount_id',
+        'manual_discount_amount', 
         'guest_name',
         'contact_number',
         'total_guests',
         'entrance_subtotal',
         'facility_subtotal',
+        'third_party_service_amount',
         'subtotal',
         'discount_amount',
         'total_amount',
@@ -28,24 +33,33 @@ class GuestEntry extends Model
         'amount_paid',
         'balance',
         'is_checked_out',
+        'checkout_datetime',
         'notes',
         'created_by',
+        'payment_method',
+        'exit_date',
+        'exit_time',
     ];
 
     protected $casts = [
         'entry_date' => 'date',
         'entry_time' => 'datetime',
+        'check_in_datetime' => 'datetime',
+        'checkout_datetime' => 'datetime',
         'entrance_subtotal' => 'decimal:2',
         'facility_subtotal' => 'decimal:2',
+        'third_party_service_amount' => 'decimal:2',
         'subtotal' => 'decimal:2',
         'discount_amount' => 'decimal:2',
+        'manual_discount_amount' => 'decimal:2',
         'total_amount' => 'decimal:2',
         'amount_paid' => 'decimal:2',
         'balance' => 'decimal:2',
         'is_checked_out' => 'boolean',
+        'exit_date' => 'date',
+        'exit_time' => 'datetime:H:i:s',
     ];
 
-    // Activity Log Configuration
     public function getActivitylogOptions(): LogOptions
     {
         return LogOptions::defaults()
@@ -70,8 +84,8 @@ class GuestEntry extends Model
 
     public function payments()
     {
-        return $this->morphMany(Payment::class, 'transaction', 'transaction_type', 'transaction_id')
-                    ->where('transaction_type', 'Walk_In_Entry');
+        return $this->hasMany(Payment::class, 'transaction_id')
+                    ->where('transaction_type', 'GuestEntry');
     }
 
     public function createdBy()
@@ -79,6 +93,15 @@ class GuestEntry extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public function discount()
+    {
+        return $this->belongsTo(Discount::class, 'discount_id');
+    }
+
+    public function thirdPartyServices()
+    {
+        return $this->hasMany(ThirdPartyService::class);
+    }
     // Helper method to recalculate totals
     public function recalculateTotals()
     {
@@ -98,4 +121,33 @@ class GuestEntry extends Model
         
         $this->save();
     }
+
+       // Relationships
+    public function facilityType()
+    {
+        return $this->belongsTo(FacilityType::class);
+    }
+
+    public function rates()
+    {
+        return $this->hasMany(Rate::class);
+    }
+
+    public function scopeWalkIn($query)
+    {
+        return $query->where('booking_type', 'walk_in');
+    }
+
+    public function scopeBooking($query)
+    {
+        return $query->where('booking_type', 'booking');
+    }
+
+    public function scopeAvailableForWalkIn($query)
+    {
+        return $query->where('booking_type', 'walk_in')
+                     ->where('is_available_for_booking', true)
+                     ->where('is_maintenance', false);
+    }
+    
 }

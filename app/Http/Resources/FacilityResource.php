@@ -19,6 +19,7 @@ class FacilityResource extends JsonResource
                     'description' => $this->facilityType->description,
                 ];
             }),
+            'booking_type' => $this->booking_type,
             'name' => $this->name,
             'quantity' => $this->quantity,
             'expected_capacity' => $this->expected_capacity,

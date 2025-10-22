@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Spatie\Activitylog\Traits\LogsActivity;
 use Spatie\Activitylog\LogOptions;
+use Carbon\Carbon;
 
 class Discount extends Model
 {
@@ -20,12 +21,14 @@ class Discount extends Model
         'value',
         'valid_from',
         'valid_until',
+        'is_active',
     ];
 
     protected $casts = [
         'value' => 'decimal:2',
         'valid_from' => 'date',
         'valid_until' => 'date',
+        'is_active' => 'boolean',
     ];
 
     // Activity Log Configuration
@@ -37,15 +40,9 @@ class Discount extends Model
             ->dontSubmitEmptyLogs();
     }
 
-    // Relationships
-    public function autoDiscountedDetails()
+    public function guestEntryDetails()
     {
-        return $this->hasMany(GuestEntryDetail::class, 'auto_discount_id');
-    }
-
-    public function manualDiscountedDetails()
-    {
-        return $this->hasMany(GuestEntryDetail::class, 'manual_discount_id');
+        return $this->hasMany(GuestEntryDetail::class, 'discount_id');
     }
 
     // Helper method to calculate discount amount based on base amount
@@ -60,18 +57,51 @@ class Discount extends Model
     }
 
     // Helper method to check if discount is currently valid
-    public function isValid($date = null)
+    public function isActive(): bool
     {
-        $checkDate = $date ? \Carbon\Carbon::parse($date) : now();
-        
-        if ($this->valid_from && $checkDate->lt($this->valid_from)) {
+        // Get current date (start of day for comparison)
+        $today = Carbon::now()->startOfDay();
+
+        // If manually disabled in database, return false immediately
+        if (!$this->is_active) {
             return false;
         }
-        
-        if ($this->valid_until && $checkDate->gt($this->valid_until)) {
-            return false;
+
+        // Parse the date fields
+        $validFrom = $this->valid_from ? Carbon::parse($this->valid_from)->startOfDay() : null;
+        $validUntil = $this->valid_until ? Carbon::parse($this->valid_until)->endOfDay() : null;
+
+        // If no date restrictions, just check is_active flag
+        if (!$validFrom && !$validUntil) {
+            return true;
         }
+
+        // Check if current date is after start date (or no start date)
+        $afterStart = !$validFrom || $today->greaterThanOrEqualTo($validFrom);
         
-        return true;
+        // Check if current date is before end date (or no end date)
+        $beforeEnd = !$validUntil || $today->lessThanOrEqualTo($validUntil);
+
+        // Discount is active only if both conditions are true
+        return $afterStart && $beforeEnd;
+    }
+
+    public function scopeActive($query)
+    {
+        $today = Carbon::now()->startOfDay();
+
+        return $query->where('is_active', true)
+            ->where(function ($q) use ($today) {
+                $q->where(function ($dateQuery) use ($today) {
+                    // valid_from is null OR valid_from <= today
+                    $dateQuery->whereNull('valid_from')
+                              ->orWhere('valid_from', '<=', $today);
+                })
+                ->where(function ($dateQuery) use ($today) {
+                    // valid_until is null OR valid_until >= today
+                    $dateQuery->whereNull('valid_until')
+                              ->orWhere('valid_until', '>=', $today);
+                });
+            });
     }
 }

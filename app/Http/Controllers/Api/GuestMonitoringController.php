@@ -3,32 +3,35 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\GuestEntry\StoreGuestEntryRequest;
+use App\Http\Requests\GuestEntry\UpdateGuestEntryRequest;
+use App\Http\Requests\GuestEntry\CheckoutGuestEntryRequest;
 use App\Http\Resources\GuestEntryResource;
 use App\Models\Discount;
 use App\Models\Facility;
 use App\Models\GuestEntry;
 use App\Models\GuestEntryDetail;
 use App\Models\GuestEntryFacility;
+use App\Models\Payment;
+use App\Models\ThirdPartyService;
 use App\Models\Rate;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class GuestMonitoringController extends Controller
 {
-    /**
-     * Display a listing of guest entries
-     */
     public function index(Request $request)
     {
         $query = GuestEntry::with([
             'details.rate',
-            'details.autoDiscount',
-            'details.manualDiscount',
+            'details.discount',
             'facilities.facility.facilityType',
+            'facilities.rate',
+            'thirdPartyServices',
             'createdBy',
+            'payments'
         ]);
 
-        // Filters
         if ($request->has('date')) {
             $query->whereDate('entry_date', $request->date);
         }
@@ -45,61 +48,52 @@ class GuestMonitoringController extends Controller
             $query->where('payment_status', $request->payment_status);
         }
 
-        if ($request->has('search')) {
-            $search = $request->search;
+        // ✅ SANITIZE SEARCH INPUT
+        if ($request->filled('search')) {
+            // Strip HTML tags
+            $search = strip_tags($request->search);
+            
+            // Remove SQL special characters (keep only alphanumeric, spaces, dashes)
+            $search = preg_replace('/[^a-zA-Z0-9\s\-]/', '', $search);
+            
+            // Limit length
+            $search = substr($search, 0, 100);
+            
             $query->where(function ($q) use ($search) {
-                $q->where('entry_reference', 'like', "%{$search}%")
-                  ->orWhere('guest_name', 'like', "%{$search}%")
-                  ->orWhere('contact_number', 'like', "%{$search}%");
+                $q->where('guest_name', 'like', "%{$search}%")
+                    ->orWhere('contact_number', 'like', "%{$search}%")
+                    ->orWhere('booking_reference', 'like', "%{$search}%"); // or entry_reference
             });
         }
 
         $perPage = $request->input('per_page', 5);
         $entries = $query->latest()->paginate($perPage);
 
-        return $this->paginatedCollection($entries, GuestEntryResource::class);
+        return GuestEntryResource::collection($entries)->additional([
+            'status' => 'success',
+            'message' => 'Guest entries retrieved successfully',
+        ]);
     }
 
-    /**
-     * Store a newly created guest entry
-     */
-    public function store(Request $request)
+    public function store(StoreGuestEntryRequest $request)
     {
-        $validated = $request->validate([
-            'guest_name' => 'required|string|max:100',
-            'contact_number' => 'nullable|string|max:20',
-            'entry_date' => 'required|date',
-            'entry_time' => 'nullable|date_format:H:i',
-            'notes' => 'nullable|string',
-            
-            // Guest details array (guest groups)
-            'guests' => 'required|array|min:1',
-            'guests.*.rate_id' => 'required|exists:rates,id',
-            'guests.*.guest_count' => 'required|integer|min:1',
-            'guests.*.auto_discount_id' => 'nullable|exists:discounts,id',
-            'guests.*.manual_discount_id' => 'nullable|exists:discounts,id',
-            
-            // Facility rentals array (optional)
-            'facilities' => 'nullable|array',
-            'facilities.*.facility_id' => 'required|exists:facilities,id',
-            'facilities.*.rate_id' => 'required|exists:rates,id',
-            'facilities.*.start_datetime' => 'required|date',
-            'facilities.*.end_datetime' => 'required|date|after:facilities.*.start_datetime',
-        ]);
-
         DB::beginTransaction();
         try {
-            // Generate reference number
+            $validated = $request->validated();
             $reference = $this->generateReferenceNumber();
             
-            // Calculate total guests
-            $totalGuests = collect($validated['guests'])->sum('guest_count');
+            // Calculate total guests from details
+            $totalGuests = collect($validated['details'])->sum('guest_count');
             
             // Create main entry
             $guestEntry = GuestEntry::create([
                 'entry_reference' => $reference,
                 'entry_date' => $validated['entry_date'],
                 'entry_time' => $validated['entry_time'] ?? now()->format('H:i:s'),
+                'check_in_datetime' => now(),
+                'discount_mode' => $validated['discount_mode'],
+                'discount_id' => $validated['discount_id'] ?? null,
+                'manual_discount_amount' => $validated['manual_discount_amount'] ?? 0.00,
                 'guest_name' => $validated['guest_name'],
                 'contact_number' => $validated['contact_number'] ?? null,
                 'total_guests' => $totalGuests,
@@ -109,9 +103,12 @@ class GuestMonitoringController extends Controller
 
             // Process guest details (entrance fees)
             $entranceSubtotal = 0;
-            foreach ($validated['guests'] as $guest) {
-                $detail = $this->createGuestDetail($guestEntry->id, $guest);
-                $entranceSubtotal += $detail->total_amount;
+            $totalDetailDiscounts = 0;
+            
+            foreach ($validated['details'] as $detail) {
+                $detailRecord = $this->createGuestDetail($guestEntry->id, $detail);
+                $entranceSubtotal += $detailRecord->total_amount;
+                $totalDetailDiscounts += $detailRecord->discount_amount;
             }
 
             // Process facility rentals (if any)
@@ -123,52 +120,173 @@ class GuestMonitoringController extends Controller
                 }
             }
 
-            // Update totals
+            // Process third-party services (if any)
+            $thirdPartyAmount = 0;
+            if (isset($validated['third_party_services']) && count($validated['third_party_services']) > 0) {
+                foreach ($validated['third_party_services'] as $service) {
+                    ThirdPartyService::create([
+                        'guest_entry_id' => $guestEntry->id,
+                        'service_name' => $service['service_name'],
+                        'amount' => $service['amount'],
+                    ]);
+                    $thirdPartyAmount += $service['amount'];
+                }
+            }
+
+            // Calculate final amounts
+            $subtotal = $entranceSubtotal + $facilitySubtotal;
+            $discountAmount = 0;
+
+            // Apply entry-level discount
+            if ($validated['discount_mode'] === 'Seasonal' && $validated['discount_id']) {
+                $discount = Discount::findOrFail($validated['discount_id']);
+                // Apply seasonal discount only to entrance fees
+                $discountAmount = $this->calculateDiscountAmount($discount, $entranceSubtotal);
+            } 
+            elseif ($validated['discount_mode'] === 'Manual' && isset($validated['manual_discount_amount'])) {
+                $discountAmount = $validated['manual_discount_amount'];
+            } 
+            elseif ($validated['discount_mode'] === 'Direct') {
+                // Direct discounts already applied in entrance_subtotal
+                $discountAmount = 0;
+            }
+
+            $totalAmount = $subtotal - $discountAmount + $thirdPartyAmount;
+
+            // ✅ VALIDATE: Payment must be provided
+            if (!isset($validated['payment'])) {
+                DB::rollBack();
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Payment information is required for check-in',
+                    'errors' => [
+                        'payment' => [
+                            sprintf('Payment is required. Guest must pay ₱%.2f to check in.', $totalAmount)
+                        ]
+                    ],
+                    'required_amount' => $totalAmount
+                ], 422);
+            }
+
+            $paymentAmount = $validated['payment']['amount_paid'] ?? 0;
+            $paymentMethod = $validated['payment']['method'] ?? 'Cash';
+
+            // ✅ VALIDATE: Full payment required
+            if ($paymentAmount < $totalAmount) {
+                DB::rollBack();
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Full payment is required for check-in',
+                    'errors' => [
+                        'payment.amount' => [
+                            sprintf(
+                                'Payment amount (₱%.2f) is less than total amount (₱%.2f). Full payment of ₱%.2f is required.',
+                                $paymentAmount,
+                                $totalAmount,
+                                $totalAmount
+                            )
+                        ]
+                    ],
+                    'total_amount' => $totalAmount,
+                    'payment_amount' => $paymentAmount,
+                    'balance' => $totalAmount - $paymentAmount
+                ], 422);
+            }
+
+            // ✅ CREATE PAYMENT RECORD
+            $paymentReference = $this->generatePaymentReference();
+            
+            Payment::create([
+                'transaction_reference' => $paymentReference,
+                'transaction_type' => 'GuestEntry',
+                'transaction_id' => $guestEntry->id,
+                'payment_date' => now()->toDateString(),
+                'payment_time' => now()->toTimeString(),
+                'payment_method' => $paymentMethod,
+                'amount_paid' => $paymentAmount,
+                'change_amount' => max(0, $paymentAmount - $totalAmount),
+                'received_by' => auth()->id(),
+                'payment_reference' => $validated['payment']['reference'] ?? null,
+                'notes' => $validated['payment']['notes'] ?? null,
+            ]);
+
+            // ✅ UPDATE GUEST ENTRY WITH TOTALS AND PAYMENT INFO
             $guestEntry->update([
                 'entrance_subtotal' => $entranceSubtotal,
                 'facility_subtotal' => $facilitySubtotal,
-                'subtotal' => $entranceSubtotal + $facilitySubtotal,
-                'total_amount' => $entranceSubtotal + $facilitySubtotal,
-                'balance' => $entranceSubtotal + $facilitySubtotal,
+                'third_party_service_amount' => $thirdPartyAmount,
+                'subtotal' => $subtotal,
+                'discount_amount' => $discountAmount,
+                'total_amount' => $totalAmount,
+                'amount_paid' => $paymentAmount,
+                'balance' => max(0, $totalAmount - $paymentAmount), // Should always be 0
+                'payment_status' => $paymentAmount >= $totalAmount ? 'Paid' : 'Partial', // Should always be 'Paid'
+                'payment_method' => $paymentMethod,
             ]);
 
             DB::commit();
 
-            // Load relationships for response
             $guestEntry->load([
                 'details.rate',
-                'details.autoDiscount',
-                'details.manualDiscount',
+                'details.discount',
                 'facilities.facility.facilityType',
                 'facilities.rate',
+                'thirdPartyServices',
                 'createdBy',
             ]);
 
             return response()->json([
-                'message' => 'Guest entry created successfully',
+                'status' => 'success',
+                'message' => 'Guest entry created successfully. Guest has been checked in and payment has been recorded.',
                 'data' => new GuestEntryResource($guestEntry),
+                'payment_reference' => $paymentReference,
             ], 201);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json([
-                'message' => 'Failed to create guest entry',
+            
+            \Log::error('Failed to create guest entry', [
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user' => auth()->id(),
+                'request' => $request->except('password')
+            ]);
+            
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to create guest entry',
+                'error' => config('app.debug') ? $e->getMessage() : 'An error occurred while processing your request',
             ], 500);
         }
     }
 
-    /**
-     * Display the specified guest entry
-     */
+    // Helper method to generate payment reference
+    private function generatePaymentReference(): string
+    {
+        $date = now()->format('Ymd');
+        $lastPayment = Payment::whereDate('created_at', today())
+            ->where('transaction_reference', 'like', "PAY{$date}%")
+            ->orderBy('id', 'desc')
+            ->first();
+
+        if ($lastPayment) {
+            $lastNumber = (int)substr($lastPayment->transaction_reference, -4);
+            $newNumber = str_pad($lastNumber + 1, 4, '0', STR_PAD_LEFT);
+        } else {
+            $newNumber = '0001';
+        }
+
+        return "PAY{$date}{$newNumber}";
+    }
+
     public function show($id)
     {
         $entry = GuestEntry::with([
             'details.rate',
-            'details.autoDiscount',
-            'details.manualDiscount',
+            'details.discount',
             'facilities.facility.facilityType',
             'facilities.rate',
+            'thirdPartyServices',
             'payments.receivedBy',
             'createdBy',
         ])->findOrFail($id);
@@ -178,32 +296,22 @@ class GuestMonitoringController extends Controller
         ]);
     }
 
-    /**
-     * Update the specified guest entry
-     */
-    public function update(Request $request, $id)
+    public function update(UpdateGuestEntryRequest $request, $id)
     {
         $entry = GuestEntry::findOrFail($id);
-
-        $validated = $request->validate([
-            'guest_name' => 'sometimes|string|max:100',
-            'contact_number' => 'nullable|string|max:20',
-            'notes' => 'nullable|string',
-            'discount_amount' => 'nullable|numeric|min:0',
-        ]);
+        $validated = $request->validated();
 
         $entry->update($validated);
 
-        // Recalculate totals if discount changed
         if (isset($validated['discount_amount'])) {
             $entry->recalculateTotals();
         }
 
         $entry->load([
             'details.rate',
-            'details.autoDiscount',
-            'details.manualDiscount',
+            'details.discount',
             'facilities.facility',
+            'thirdPartyServices',
             'createdBy',
         ]);
 
@@ -213,68 +321,72 @@ class GuestMonitoringController extends Controller
         ]);
     }
 
-    /**
-     * Check-out guest
-     */
     public function checkout(Request $request, $id)
     {
-        $entry = GuestEntry::findOrFail($id);
+        // ✅ Use Form Request for validation
+        $validated = app(CheckoutGuestEntryRequest::class)->validated();
+        
+        $entry = GuestEntry::with('payments')->findOrFail($id);
 
+        // ✅ Double-check (redundant but safe)
         if ($entry->is_checked_out) {
             return response()->json([
+                'status' => 'error',
                 'message' => 'Guest already checked out',
             ], 400);
         }
 
-        $validated = $request->validate([
-            'facility_extensions' => 'nullable|array',
-            'facility_extensions.*.id' => 'required|exists:guest_entry_facilities,id',
-            'facility_extensions.*.additional_hours' => 'required|numeric|min:0',
-        ]);
+        return DB::transaction(function () use ($entry, $validated) {
+            try {
 
-        DB::beginTransaction();
-        try {
-            // Process facility extensions if any
-            if (isset($validated['facility_extensions'])) {
-                foreach ($validated['facility_extensions'] as $extension) {
-                    $this->processFacilityExtension($extension);
-                }
+                // ✅ Update checkout info
+                $entry->update([
+                    'is_checked_out' => true,
+                    'checkout_datetime' => now(),
+                    'exit_date' => $validated['exit_date'],
+                    'exit_time' => $validated['exit_time'],
+                    'notes' => $validated['notes'] ?? $entry->notes,
+                ]);
+
+                // ✅ Log checkout action
+                \Log::info('Guest checked out', [
+                    'entry_id' => $entry->id,
+                    'reference' => $entry->entry_reference,
+                    'checked_out_by' => auth()->id(),
+                    'exit_datetime' => "{$validated['exit_date']} {$validated['exit_time']}",
+                    'final_payment' => $validated['payment_amount'] ?? 0,
+                    'final_balance' => $entry->balance,
+                ]);
+
+                // ✅ Load relationships for response
+                $entry->load([
+                    'details.rate',
+                    'details.discount',
+                    'facilities.facility.facilityType',
+                    'facilities.rate',
+                    'thirdPartyServices',
+                    'payments.receivedBy',
+                    'createdBy',
+                ]);
+
+                return response()->json([
+                    'status' => 'success',
+                    'message' => 'Guest checked out successfully',
+                    'data' => new GuestEntryResource($entry),
+                ]);
+
+            } catch (\Exception $e) {
+                \Log::error('Checkout failed', [
+                    'entry_id' => $entry->id,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
                 
-                // Recalculate totals
-                $entry->recalculateTotals();
+                throw $e; // Let transaction rollback
             }
-
-            $entry->update([
-                'is_checked_out' => true,
-            ]);
-
-            DB::commit();
-
-            $entry->load([
-                'details.rate',
-                'details.autoDiscount',
-                'details.manualDiscount',
-                'facilities.facility',
-                'payments',
-            ]);
-
-            return response()->json([
-                'message' => 'Guest checked out successfully',
-                'data' => new GuestEntryResource($entry),
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'message' => 'Failed to checkout guest',
-                'error' => $e->getMessage(),
-            ], 500);
-        }
+        });
     }
 
-    /**
-     * Remove the specified guest entry
-     */
     public function destroy($id)
     {
         $entry = GuestEntry::findOrFail($id);
@@ -285,8 +397,35 @@ class GuestMonitoringController extends Controller
         ]);
     }
 
+    public function archived()
+    {
+        $entries = GuestEntry::onlyTrashed()->with([
+            'details.rate',
+            'details.discount',
+            'facilities.facility.facilityType',
+            'thirdPartyServices',
+            'createdBy',
+        ])->paginate(5);
+
+        return GuestEntryResource::collection($entries)->additional([
+            'status' => 'success',
+            'message' => 'Archived guest entries retrieved successfully',
+        ]);
+    }
+
+    public function restore($id)
+    {
+        $entry = GuestEntry::onlyTrashed()->findOrFail($id);
+        $entry->restore();
+
+        return response()->json([
+            'message' => 'Guest entry restored successfully',
+            'data' => new GuestEntryResource($entry),
+        ]);
+    }
+
     // ============================================
-    // HELPER METHODS - UPDATED
+    // HELPER METHODS
     // ============================================
 
     private function generateReferenceNumber()
@@ -296,45 +435,32 @@ class GuestMonitoringController extends Controller
         return 'EN' . $date . str_pad($count, 3, '0', STR_PAD_LEFT);
     }
 
-    /**
-     * Create guest detail without guest_type_id
-     * Discounts are now explicitly provided
-     */
     private function createGuestDetail($guestEntryId, array $guestData)
     {
         $rate = Rate::findOrFail($guestData['rate_id']);
         $baseRate = $rate->base_price;
         
-        $autoDiscountId = $guestData['auto_discount_id'] ?? null;
-        $autoDiscountAmount = 0;
+        $discountId = $guestData['discount_id'] ?? null;
+        $discountAmount = 0;
 
-        // Apply automatic discount if provided (e.g., Senior Citizen, PWD)
-        if ($autoDiscountId) {
-            $autoDiscount = Discount::findOrFail($autoDiscountId);
-            $autoDiscountAmount = $autoDiscount->calculateDiscountAmount($baseRate);
+        // Apply Direct discount if provided
+        if ($guestData['discount_mode'] === 'Direct' && $discountId) {
+            $discount = Discount::findOrFail($discountId);
+            $discountAmount = $this->calculateDiscountAmount($discount, $baseRate);
         }
 
-        // Apply manual discount if provided (additional promotional discounts)
-        $manualDiscountId = $guestData['manual_discount_id'] ?? null;
-        $manualDiscountAmount = 0;
-        if ($manualDiscountId) {
-            $manualDiscount = Discount::findOrFail($manualDiscountId);
-            $rateAfterAuto = $baseRate - $autoDiscountAmount;
-            $manualDiscountAmount = $manualDiscount->calculateDiscountAmount($rateAfterAuto);
-        }
-
-        $finalRate = $baseRate - $autoDiscountAmount - $manualDiscountAmount;
+        $finalRate = $baseRate - $discountAmount;
         $totalAmount = $finalRate * $guestData['guest_count'];
 
         return GuestEntryDetail::create([
             'guest_entry_id' => $guestEntryId,
+            'guest_type_name' => $guestData['guest_type_name'],
             'rate_id' => $rate->id,
             'guest_count' => $guestData['guest_count'],
             'base_rate' => $baseRate,
-            'auto_discount_id' => $autoDiscountId,
-            'auto_discount_amount' => $autoDiscountAmount,
-            'manual_discount_id' => $manualDiscountId,
-            'manual_discount_amount' => $manualDiscountAmount,
+            'discount_mode' => $guestData['discount_mode'],
+            'discount_id' => $discountId,
+            'discount_amount' => $discountAmount,
             'final_rate' => max(0, $finalRate),
             'total_amount' => max(0, $totalAmount),
         ]);
@@ -342,6 +468,11 @@ class GuestMonitoringController extends Controller
 
     private function createFacilityRental($guestEntryId, array $facilityData)
     {
+        // Validate required keys
+        if (!isset($facilityData['start_datetime']) || !isset($facilityData['end_datetime'])) {
+            throw new \Exception('Missing start_datetime or end_datetime for a facility.');
+        }
+
         $rate = Rate::findOrFail($facilityData['rate_id']);
         $facility = Facility::findOrFail($facilityData['facility_id']);
         
@@ -363,6 +494,7 @@ class GuestMonitoringController extends Controller
             'guest_entry_id' => $guestEntryId,
             'facility_id' => $facility->id,
             'rate_id' => $rate->id,
+            'quantity' => $facilityData['quantity'] ?? 1,
             'start_datetime' => $facilityData['start_datetime'],
             'end_datetime' => $facilityData['end_datetime'],
             'duration_hours' => round($durationHours, 2),
@@ -387,27 +519,11 @@ class GuestMonitoringController extends Controller
         ]);
     }
 
-    public function archived()
+    private function calculateDiscountAmount($discount, $amount)
     {
-        $entries = GuestEntry::onlyTrashed()->with([
-            'details.rate',
-            'details.autoDiscount',
-            'details.manualDiscount',
-            'facilities.facility.facilityType',
-            'createdBy',
-        ])->paginate(5);
-
-        return $this->paginatedCollection($entries, GuestEntryResource::class);
-    }
-
-    public function restore($id)
-    {
-        $entry = GuestEntry::onlyTrashed()->findOrFail($id);
-        $entry->restore();
-
-        return response()->json([
-            'message' => 'Guest entry restored successfully',
-            'data' => new GuestEntryResource($entry),
-        ]);
+        if ($discount->type === 'Percentage') {
+            return ($amount * $discount->value) / 100;
+        }
+        return min($discount->value, $amount);
     }
 }

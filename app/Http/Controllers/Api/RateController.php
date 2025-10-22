@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Rate\StoreRateRequest;
+use App\Http\Requests\Rate\UpdateRateRequest;
 use App\Http\Resources\RateResource;
 use App\Models\Rate;
 use Illuminate\Http\Request;
@@ -32,21 +34,15 @@ class RateController extends Controller
         $perPage = $request->input('per_page', 5);
         $rates = $query->paginate($perPage);
 
-        return $this->paginatedCollection($rates, RateResource::class);
+        return RateResource::collection($rates)->additional([
+            'status' => 'success',
+            'message' => 'Rates retrieved successfully',
+        ]);
     }
 
-    public function store(Request $request)
+    public function store(StoreRateRequest $request)
     {
-        $validated = $request->validate([
-            'facility_id' => 'nullable|exists:facilities,id',
-            'rate_name' => 'required|string|max:100',
-            'rate_category' => 'required|in:Facility,Entrance,Exclusive',
-            'rate_type' => 'nullable|in:Day_Based,Time_Based',
-            'base_price' => 'required|numeric|min:0',
-            'duration' => 'nullable|integer|min:1',
-            'extension_fee' => 'nullable|numeric|min:0',
-        ]);
-
+        $validated = $request->validated();
         $rate = Rate::create($validated);
         $rate->load('facility.facilityType');
 
@@ -65,19 +61,10 @@ class RateController extends Controller
         ]);
     }
 
-    public function update(Request $request, $id)
+    public function update(UpdateRateRequest $request, $id)
     {
         $rate = Rate::findOrFail($id);
-
-        $validated = $request->validate([
-            'facility_id' => 'nullable|exists:facilities,id',
-            'rate_name' => 'sometimes|string|max:100',
-            'rate_category' => 'sometimes|in:Facility,Entrance,Exclusive',
-            'rate_type' => 'nullable|in:Day_Based,Time_Based',
-            'base_price' => 'sometimes|numeric|min:0',
-            'duration' => 'nullable|integer|min:1',
-            'extension_fee' => 'nullable|numeric|min:0',
-        ]);
+        $validated = $request->validated();
 
         $rate->update($validated);
         $rate->load('facility.facilityType');
@@ -113,7 +100,10 @@ class RateController extends Controller
             ])
             ->paginate($perPage);
 
-        return $this->paginatedCollection($rates, RateResource::class);
+        return RateResource::collection($rates)->additional([
+            'status' => 'success',
+            'message' => 'Archived rates retrieved successfully',
+        ]);
     }
 
     public function restore($id)
