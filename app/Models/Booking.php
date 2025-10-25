@@ -13,6 +13,12 @@ class Booking extends Model
     use HasFactory, SoftDeletes, LogsActivity;
 
     protected $fillable = [
+        'booking_type',
+        'entrance_rate_id',         // For Swimming bookings
+        'discount_mode',            // None/Direct/Seasonal/Manual
+        'discount_id',              // FK to discounts table
+        'manual_discount_amount',   // Staff discount
+        'discount_amount',          // Total discount applied
         'booking_reference',
         'guest_name',
         'contact_number',
@@ -37,9 +43,7 @@ class Booking extends Model
         'third_party_service_amount',
         'subtotal',
         'total_amount',
-        'payment_status',
-        'amount_paid',
-        'balance',
+        // ❌ REMOVED: payment_status, amount_paid, balance
         'special_requests',
         'notes',
         'created_by',
@@ -58,8 +62,9 @@ class Booking extends Model
         'subtotal' => 'decimal:2',
         'third_party_service_amount' => 'decimal:2',
         'total_amount' => 'decimal:2',
-        'amount_paid' => 'decimal:2',
-        'balance' => 'decimal:2',
+        'manual_discount_amount' => 'decimal:2',
+        'discount_amount' => 'decimal:2',
+
     ];
 
     // Activity Log Configuration
@@ -68,20 +73,23 @@ class Booking extends Model
         return LogOptions::defaults()
             ->logOnly([
                 'booking_reference', 'guest_name', 'booking_status', 
-                'payment_status', 'total_amount', 'balance'
+                'total_amount' // Removed payment_status and balance
             ])
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs();
     }
 
-    // Relationships
+    // ========================================
+    // RELATIONSHIPS
+    // ========================================
+    
     public function facility()
     {
         return $this->belongsTo(Facility::class);
     }
 
     /**
-     * Get all facilities for this booking (NEW - Multi-facility support)
+     * Get all facilities for this booking (Multi-facility support)
      */
     public function facilities()
     {
@@ -111,13 +119,17 @@ class Booking extends Model
         return $this->belongsTo(User::class, 'checked_out_by');
     }
 
-    public function payments()
+    /**
+     * ✅ NEW: Polymorphic relationship to billing
+     */
+    public function billing()
     {
-        return $this->morphMany(Payment::class, 'transaction', 'transaction_type', 'transaction_id')
-                    ->where('transaction_type', 'Booking');
+        return $this->morphOne(Billing::class, 'billable');
     }
 
-    // Helper Methods
+    // ========================================
+    // HELPER METHODS
+    // ========================================
     
     /**
      * Check if booking can be cancelled
@@ -133,28 +145,36 @@ class Booking extends Model
     }
 
     /**
-     * Check if booking requires payment
+     * ✅ UPDATED: Check if booking requires payment (via billing)
      */
     public function requiresPayment(): bool
     {
-        return $this->balance > 0;
+        return $this->billing && $this->billing->balance > 0;
     }
 
     /**
-     * Check if minimum deposit (50%) is paid
+     * ✅ UPDATED: Check if minimum deposit (50%) is paid
      */
     public function hasMinimumDeposit(): bool
     {
-        $minimumDeposit = $this->total_amount * 0.5;
-        return $this->amount_paid >= $minimumDeposit;
+        if (!$this->billing) {
+            return false;
+        }
+        
+        $minimumDeposit = $this->billing->total_amount * 0.5;
+        return $this->billing->amount_paid >= $minimumDeposit;
     }
 
     /**
-     * Calculate minimum deposit required (50%)
+     * ✅ UPDATED: Calculate minimum deposit required (50%)
      */
     public function getMinimumDepositAttribute(): float
     {
-        return round($this->total_amount * 0.5, 2);
+        if (!$this->billing) {
+            return 0;
+        }
+        
+        return round($this->billing->total_amount * 0.5, 2);
     }
 
     /**
@@ -172,5 +192,42 @@ class Booking extends Model
         $lateCheckInTime = $checkInTime->copy()->addHours(2);
         
         return $now->between($earlyCheckInTime, $lateCheckInTime);
+    }
+
+    /**
+     * ✅ NEW: Get payment status from billing
+     */
+    public function getPaymentStatusAttribute(): ?string
+    {
+        return $this->billing?->payment_status;
+    }
+
+    /**
+     * ✅ NEW: Get amount paid from billing
+     */
+    public function getAmountPaidAttribute(): float
+    {
+        return $this->billing?->amount_paid ?? 0;
+    }
+
+    /**
+     * ✅ NEW: Get balance from billing
+     */
+    public function getBalanceAttribute(): float
+    {
+        return $this->billing?->balance ?? 0;
+    }
+
+    public function entranceRate()
+    {
+        return $this->belongsTo(Rate::class, 'entrance_rate_id');
+    }
+
+    /**
+     * 🔧 ADD: Discount relationship
+     */
+    public function discount()
+    {
+        return $this->belongsTo(Discount::class, 'discount_id');
     }
 }

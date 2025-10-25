@@ -5,26 +5,46 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Payment\StorePaymentRequest;
 use App\Http\Resources\PaymentResource;
-use App\Models\Booking;
-use App\Models\GuestEntry;
+use App\Models\Billing;
 use App\Models\Payment;
+use App\Services\BillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class PaymentController extends Controller
 {
+    protected $billingService;
+
+    public function __construct(BillingService $billingService)
+    {
+        $this->billingService = $billingService;
+    }
+
     /**
      * Get paginated list of payments with filters
      */
     public function index(Request $request)
     {
-        // ✅ REMOVED ->with(['receivedBy']) to prevent eager loading
-        $query = Payment::query();
+        // ✅ Check permission using YOUR permission name
+        if (!auth()->user()->can('view-payments')) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unauthorized. You do not have permission to view payments.',
+            ], 403);
+        }
 
-        // Filter by transaction type
+        $query = Payment::with([
+            'billing.billable',
+            'receivedBy'
+        ]);
+
+        // Filter by transaction type (via billing's billable)
         if ($request->has('transaction_type') && $request->transaction_type !== 'all') {
-            $query->where('transaction_type', $request->transaction_type);
+            $query->whereHasMorph('billing.billable', 
+                [$request->transaction_type], 
+                function ($q) {}
+            );
         }
 
         // Filter by date range
@@ -36,34 +56,40 @@ class PaymentController extends Controller
             $query->whereDate('payment_date', '<=', $request->date_to);
         }
 
-        // Search by reference, guest name, or payment reference
+        // Filter by payment method
+        if ($request->has('payment_method') && $request->payment_method !== 'all') {
+            $query->where('payment_method', $request->payment_method);
+        }
+
+        // Filter by payment type
+        if ($request->has('payment_type') && $request->payment_type !== 'all') {
+            $query->where('payment_type', $request->payment_type);
+        }
+
+        // Search by payment number, billing number, or guest name
         if ($request->has('search') && !empty($request->search)) {
             $search = $request->search;
             
             $query->where(function($q) use ($search) {
-                $q->where('transaction_reference', 'like', "%{$search}%")
-                ->orWhere('payment_reference', 'like', "%{$search}%")
-                ->orWhere('payment_method', 'like', "%{$search}%");
-                
-                $q->orWhereHas('booking', function($bookingQuery) use ($search) {
-                    $bookingQuery->where('guest_name', 'like', "%{$search}%");
-                });
-                
-                $q->orWhereHas('guestEntry', function($entryQuery) use ($search) {
-                    $entryQuery->where('guest_name', 'like', "%{$search}%");
-                });
+                $q->where('payment_number', 'like', "%{$search}%")
+                  ->orWhere('reference_number', 'like', "%{$search}%")
+                  ->orWhereHas('billing', function($billingQuery) use ($search) {
+                      $billingQuery->where('billing_number', 'like', "%{$search}%");
+                  })
+                  ->orWhereHas('billing.billable', function($billableQuery) use ($search) {
+                      $billableQuery->where('guest_name', 'like', "%{$search}%");
+                  });
             });
         }
 
         // Sort by latest first
         $query->orderBy('payment_date', 'desc')
-            ->orderBy('payment_time', 'desc');
+              ->orderBy('created_at', 'desc');
 
         // Paginate
         $perPage = $request->input('per_page', 15);
         $payments = $query->paginate($perPage);
 
-        // ✅ The Resource will handle loading receivedBy when needed
         return PaymentResource::collection($payments)->additional([
             'status' => 'success',
             'message' => 'Payments retrieved successfully'
@@ -75,87 +101,104 @@ class PaymentController extends Controller
      */
     public function show($id)
     {
-        // ✅ REMOVED ->with(['receivedBy']) here too
-        $payment = Payment::with(['booking', 'guestEntry'])
-            ->findOrFail($id);
+        // ✅ Check permission
+        if (!auth()->user()->can('view-payments')) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unauthorized. You do not have permission to view payments.',
+            ], 403);
+        }
+
+        $payment = Payment::with([
+            'billing.billable',
+            'receivedBy'
+        ])->findOrFail($id);
 
         return response()->json([
+            'status' => 'success',
             'data' => new PaymentResource($payment),
         ]);
     }
 
     /**
-     * Store a new payment
+     * Store a new payment (additional payment for existing billing)
      */
     public function store(StorePaymentRequest $request)
     {
+        // ✅ Check permission
+        if (!auth()->user()->can('process-payments')) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unauthorized. You do not have permission to process payments.',
+            ], 403);
+        }
+
         DB::beginTransaction();
         try {
             $validated = $request->validated();
             
-            // Get the transaction (booking or guest entry)
-            $transaction = $this->getTransaction(
-                $validated['transaction_type'], 
-                $validated['transaction_id']
-            );
+            // Get billing record
+            $billing = Billing::with('billable')->findOrFail($validated['billing_id']);
             
-            if (!$transaction) {
+            // Check if billing is already paid
+            if ($billing->payment_status === 'paid') {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'Transaction not found',
-                ], 404);
-            }
-
-            // Validate payment doesn't exceed balance
-            if ($validated['amount_paid'] > $transaction->balance) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'Payment amount exceeds remaining balance',
-                    'balance' => $transaction->balance,
+                    'message' => 'This billing is already fully paid',
+                    'billing_number' => $billing->billing_number,
                 ], 400);
             }
 
-            // Generate unique payment reference
-            $reference = $this->generatePaymentReference();
-
-            // Create payment record
-            $payment = Payment::create([
-                'transaction_reference' => $reference,
-                'transaction_type' => $validated['transaction_type'],
-                'transaction_id' => $validated['transaction_id'],
-                'payment_date' => $validated['payment_date'],
-                'payment_time' => $validated['payment_time'] ?? now()->format('H:i'),
-                'payment_method' => $validated['payment_method'],
-                'amount_paid' => $validated['amount_paid'],
-                'change_amount' => $validated['change_amount'] ?? 0,
-                'received_by' => auth()->id(),
-                'payment_reference' => $validated['payment_reference'] ?? null,
-                'notes' => $validated['notes'] ?? null,
-            ]);
-
-            // Update transaction amounts
-            $newAmountPaid = $transaction->amount_paid + $validated['amount_paid'];
-            $newBalance = $transaction->total_amount - $newAmountPaid;
-
-            // Determine payment status
-            $paymentStatus = 'Unpaid';
-            if ($newBalance <= 0) {
-                $paymentStatus = 'Paid';
-            } elseif ($newAmountPaid > 0) {
-                $paymentStatus = 'Partial';
+            // Check if billing is cancelled/voided
+            if (in_array($billing->billing_status, ['voided', 'cancelled'])) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Cannot accept payment for a cancelled/voided billing',
+                    'billing_status' => $billing->billing_status,
+                ], 400);
             }
 
-            // Update transaction
-            $transaction->update([
-                'amount_paid' => $newAmountPaid,
-                'balance' => max(0, $newBalance),
-                'payment_status' => $paymentStatus,
-            ]);
+            // Validate payment amount
+            $amountPaid = $validated['amount_paid'];
+            
+            if ($amountPaid > $billing->balance) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Payment amount exceeds remaining balance',
+                    'balance' => $billing->balance,
+                    'amount_paid' => $amountPaid,
+                ], 400);
+            }
+
+            if ($amountPaid <= 0) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Payment amount must be greater than zero',
+                ], 400);
+            }
+
+            // Record payment using BillingService
+            $paymentData = [
+                'amount_paid' => $amountPaid,
+                'payment_method' => $validated['payment_method'],
+                'change_amount' => $validated['change_amount'] ?? 0,
+                'reference_number' => $validated['reference_number'] ?? null,
+                'notes' => $validated['notes'] ?? null,
+            ];
+
+            $payment = $this->billingService->recordPayment($billing, $paymentData);
 
             DB::commit();
 
-            // ✅ REMOVED ->load('receivedBy') - let Resource handle it
-            // The resource will lazy load it only when needed
+            Log::info('Payment recorded', [
+                'payment_id' => $payment->id,
+                'billing_id' => $billing->id,
+                'amount' => $amountPaid,
+                'received_by' => auth()->id(),
+            ]);
+
+            // Load relationships
+            $payment->load(['billing.billable', 'receivedBy']);
 
             return response()->json([
                 'status' => 'success',
@@ -166,7 +209,7 @@ class PaymentController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             
-            \Log::error('Payment creation failed', [
+            Log::error('Payment creation failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
                 'user' => auth()->id(),
@@ -181,135 +224,193 @@ class PaymentController extends Controller
         }
     }
 
-    public function destroy($id)
+    /**
+     * ✅ NEW: Reverse a payment (Manager/Admin only)
+     */
+    public function reverse(Request $request, $id)
     {
-        $payment = Payment::findOrFail($id);
-
-        // ✅ CHECK TIME RESTRICTION
-        $createdAt = $payment->created_at;
-        $minutesSinceCreation = $createdAt->diffInMinutes(now());
-        
-        if ($minutesSinceCreation > 5) {
+        // ✅ Check permission - Only Manager and Admin can reverse
+        if (!auth()->user()->can('reverse-payments')) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Payment can only be deleted within 5 minutes of creation',
-                'created_at' => $payment->created_at,
-                'current_time' => now(),
+                'message' => 'Unauthorized. Only Managers and Admins can reverse payments.',
             ], 403);
         }
 
-        return DB::transaction(function () use ($payment, $id) {
+        $request->validate([
+            'reason' => 'required|string|min:10|max:500',
+        ]);
+
+        return DB::transaction(function () use ($request, $id) {
             try {
-                // Get the transaction
-                $transaction = $this->getTransaction(
-                    $payment->transaction_type, 
-                    $payment->transaction_id
-                );
-                
-                if (!$transaction) {
+                $payment = Payment::with('billing.billable')->findOrFail($id);
+
+                // Check if already reversed
+                if ($payment->payment_type === 'reversal') {
                     return response()->json([
                         'status' => 'error',
-                        'message' => 'Associated transaction not found'
-                    ], 404);
+                        'message' => 'This is already a reversal payment',
+                    ], 400);
                 }
 
-                // ✅ CHECK TRANSACTION STATUS
-                if ($payment->transaction_type === 'Booking') {
-                    if (in_array($transaction->booking_status, ['Checked_In', 'Checked_Out', 'Cancelled'])) {
-                        return response()->json([
-                            'status' => 'error',
-                            'message' => 'Cannot delete payment for a booking that is checked in, checked out, or cancelled',
-                            'booking_status' => $transaction->booking_status,
-                        ], 400);
-                    }
-                } elseif ($payment->transaction_type === 'GuestEntry') {
-                    if ($transaction->is_checked_out) {
-                        return response()->json([
-                            'status' => 'error',
-                            'message' => 'Cannot delete payment for a checked-out guest entry'
-                        ], 400);
-                    }
-                }
-                
-                // Reverse the payment amounts
-                $newAmountPaid = max(0, $transaction->amount_paid - $payment->amount_paid);
-                $newBalance = $transaction->total_amount - $newAmountPaid;
-
-                // Determine new payment status
-                $paymentStatus = 'Unpaid';
-                if ($newBalance <= 0) {
-                    $paymentStatus = 'Paid';
-                } elseif ($newAmountPaid > 0) {
-                    $paymentStatus = 'Partial';
+                // Check if payment was already reversed
+                if (str_contains($payment->notes ?? '', '[REVERSED')) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'This payment has already been reversed',
+                    ], 400);
                 }
 
-                // Update transaction
-                $transaction->update([
-                    'amount_paid' => $newAmountPaid,
-                    'balance' => max(0, $newBalance),
-                    'payment_status' => $paymentStatus,
+                // Reverse payment using BillingService
+                $reversal = $this->billingService->reversePayment($payment, $request->reason);
+
+                Log::warning('Payment reversed via API', [
+                    'original_payment_id' => $payment->id,
+                    'reversal_payment_id' => $reversal->id,
+                    'amount' => $payment->amount,
+                    'reason' => $request->reason,
+                    'reversed_by' => auth()->id(),
+                    'reversed_by_role' => auth()->user()->getRoleNames()->first(),
                 ]);
 
-                // Delete payment
-                $payment->delete();
-
-                Log::info('Payment deleted', [
-                    'payment_id' => $id,
-                    'transaction_type' => $payment->transaction_type,
-                    'transaction_id' => $payment->transaction_id,
-                    'deleted_by' => auth()->id(),
-                ]);
+                // Load relationships
+                $reversal->load(['billing.billable', 'receivedBy']);
 
                 return response()->json([
                     'status' => 'success',
-                    'message' => 'Payment deleted successfully',
+                    'message' => 'Payment reversed successfully',
+                    'data' => [
+                        'reversal' => new PaymentResource($reversal),
+                        'original_payment' => new PaymentResource($payment->fresh()),
+                    ],
                 ]);
 
             } catch (\Exception $e) {
-                Log::error('Payment deletion failed', [
+                Log::error('Payment reversal failed', [
                     'payment_id' => $id,
                     'error' => $e->getMessage(),
                     'user_id' => auth()->id(),
                 ]);
                 
-                throw $e;
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $e->getMessage(),
+                ], 400);
             }
         });
     }
 
-    // ========================================
-    // HELPER METHODS
-    // ========================================
-
     /**
-     * Get transaction (Booking or GuestEntry) by type and ID
+     * ❌ DEPRECATED: Delete payment functionality removed
+     * Use reverse() instead for proper accounting
      */
-    private function getTransaction($type, $id)
+    public function destroy($id)
     {
-        if ($type === 'Booking') {
-            return Booking::find($id);
-        }
-        return GuestEntry::find($id);
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Payment deletion is no longer supported. Please use the reverse payment endpoint instead.',
+            'alternative_endpoint' => route('payments.reverse', $id),
+        ], 410); // 410 Gone
     }
 
     /**
-     * Generate unique payment reference number
+     * Get all payments for a specific billing
      */
-    private function generatePaymentReference()
+    public function getPaymentsByBilling($billingId)
     {
-        $date = now()->format('Ymd');
-        $lastPayment = Payment::whereDate('created_at', today())
-            ->where('transaction_reference', 'like', "PAY{$date}%")
-            ->orderBy('id', 'desc')
-            ->first();
-
-        if ($lastPayment) {
-            $lastNumber = (int)substr($lastPayment->transaction_reference, -4);
-            $newNumber = str_pad($lastNumber + 1, 4, '0', STR_PAD_LEFT);
-        } else {
-            $newNumber = '0001';
+        // ✅ Check permission
+        if (!auth()->user()->can('view-payments')) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unauthorized. You do not have permission to view payments.',
+            ], 403);
         }
 
-        return "PAY{$date}{$newNumber}";
+        $billing = Billing::with(['billable', 'payments.receivedBy'])
+            ->findOrFail($billingId);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'billing' => [
+                    'id' => $billing->id,
+                    'billing_number' => $billing->billing_number,
+                    'total_amount' => $billing->total_amount,
+                    'amount_paid' => $billing->amount_paid,
+                    'balance' => $billing->balance,
+                    'payment_status' => $billing->payment_status,
+                ],
+                'payments' => PaymentResource::collection($billing->payments),
+            ],
+        ]);
+    }
+
+    /**
+     * Get payment summary/statistics
+     */
+    public function summary(Request $request)
+    {
+        // ✅ Check permission - Only Manager/Admin can view summaries
+        if (!auth()->user()->can('view-financial-reports')) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unauthorized. You do not have permission to view payment summaries.',
+            ], 403);
+        }
+
+        $query = Payment::query();
+
+        // Filter by date range
+        if ($request->has('date_from')) {
+            $query->whereDate('payment_date', '>=', $request->date_from);
+        }
+
+        if ($request->has('date_to')) {
+            $query->whereDate('payment_date', '<=', $request->date_to);
+        }
+
+        // Calculate totals
+        $totalPayments = $query->count();
+        $totalAmount = $query->sum('amount');
+
+        // Group by payment method
+        $byMethod = Payment::query()
+            ->when($request->has('date_from'), function($q) use ($request) {
+                $q->whereDate('payment_date', '>=', $request->date_from);
+            })
+            ->when($request->has('date_to'), function($q) use ($request) {
+                $q->whereDate('payment_date', '<=', $request->date_to);
+            })
+            ->select('payment_method', 
+                DB::raw('COUNT(*) as count'), 
+                DB::raw('SUM(amount) as total')
+            )
+            ->groupBy('payment_method')
+            ->get();
+
+        // Group by payment type
+        $byType = Payment::query()
+            ->when($request->has('date_from'), function($q) use ($request) {
+                $q->whereDate('payment_date', '>=', $request->date_from);
+            })
+            ->when($request->has('date_to'), function($q) use ($request) {
+                $q->whereDate('payment_date', '<=', $request->date_to);
+            })
+            ->select('payment_type', 
+                DB::raw('COUNT(*) as count'), 
+                DB::raw('SUM(amount) as total')
+            )
+            ->groupBy('payment_type')
+            ->get();
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'total_payments' => $totalPayments,
+                'total_amount' => number_format($totalAmount, 2),
+                'by_payment_method' => $byMethod,
+                'by_payment_type' => $byType,
+            ],
+        ]);
     }
 }

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\BillingController;
 use App\Http\Controllers\Api\FacilityAvailabilityController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BookingController;
@@ -9,6 +10,7 @@ use App\Http\Controllers\Api\FacilityTypeController;
 use App\Http\Controllers\Api\GuestMonitoringController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\RateController;
+use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\RateLimiter;
@@ -41,7 +43,7 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:manage-bookings');
 
         Route::get('/archived', [BookingController::class, 'archived'])
-            ->middleware('permission:manage-bookings');
+            ->middleware('permission:view-audit-logs'); // Changed: Only Manager/Admin can view archives
 
         Route::get('/{id}', [BookingController::class, 'show'])
             ->middleware('permission:view-bookings');
@@ -56,13 +58,17 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:manage-bookings');
 
         Route::post('/{id}/check-in', [BookingController::class, 'checkIn'])
-            ->middleware('permission:manage-bookings');
+            ->middleware('permission:check-in-guests'); // Changed: Staff can check-in
 
         Route::post('/{id}/check-out', [BookingController::class, 'checkOut'])
-            ->middleware('permission:manage-bookings');
+            ->middleware('permission:check-in-guests'); // Changed: Staff can check-out
+
+        // ✅ NEW: Downpayment endpoint (Staff can record)
+        Route::post('/{id}/downpayment', [BookingController::class, 'recordDownpayment'])
+            ->middleware('permission:record-downpayment');
 
         Route::post('/{id}/cancel', [BookingController::class, 'cancel'])
-            ->middleware('permission:manage-bookings');
+            ->middleware('permission:cancel-bookings'); // Changed: Manager/Admin only
     });
 
     // ========================================
@@ -76,7 +82,7 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:process-walk-ins');
 
         Route::get('/archived', [GuestMonitoringController::class, 'archived'])
-            ->middleware('permission:manage-walk-ins');
+            ->middleware('permission:view-audit-logs'); // Changed: Manager/Admin only
         
         Route::get('/{id}', [GuestMonitoringController::class, 'show'])
             ->middleware('permission:view-walk-ins');
@@ -91,7 +97,7 @@ Route::middleware('auth:sanctum')->group(function () {
             ->middleware('permission:process-walk-ins');
 
         Route::post('/{id}/restore', [GuestMonitoringController::class, 'restore'])
-            ->middleware('permission:manage-walk-ins');
+            ->middleware('permission:view-audit-logs'); // Changed: Manager/Admin only
     });
 
     // ========================================
@@ -99,14 +105,21 @@ Route::middleware('auth:sanctum')->group(function () {
     // ========================================
     Route::prefix('facilities')->group(function () {
         // ✅ AVAILABILITY ROUTES (Must come BEFORE {id} routes!)
-        Route::post('/check-availability', [FacilityAvailabilityController::class, 'checkMultipleFacilities']);
-        Route::get('/walk-in', [FacilityController::class, 'getWalkInFacilities']);
+        Route::post('/check-availability', [FacilityAvailabilityController::class, 'checkMultipleFacilities'])
+            ->middleware('permission:check-availability'); // Added permission
+        
+        Route::get('/walk-in', [FacilityController::class, 'getWalkInFacilities'])
+            ->middleware('permission:view-facilities'); // Added permission
+        
         Route::get('/archived', [FacilityController::class, 'archived'])
             ->middleware('permission:manage-facilities');
         
         // ✅ SPECIFIC FACILITY AVAILABILITY
-        Route::get('/{facilityId}/availability', [FacilityAvailabilityController::class, 'checkAvailability']);
-        Route::get('/{facilityId}/conflicts', [FacilityAvailabilityController::class, 'getConflicts']);
+        Route::get('/{facilityId}/availability', [FacilityAvailabilityController::class, 'checkAvailability'])
+            ->middleware('permission:check-availability'); // Added permission
+        
+        Route::get('/{facilityId}/conflicts', [FacilityAvailabilityController::class, 'getConflicts'])
+            ->middleware('permission:check-availability'); // Added permission
         
         // ✅ FACILITY CRUD
         Route::get('/', [FacilityController::class, 'index'])
@@ -210,17 +223,64 @@ Route::middleware('auth:sanctum')->group(function () {
     // PAYMENTS
     // ========================================
     Route::prefix('payments')->group(function () {
+        // List all payments with filters
         Route::get('/', [PaymentController::class, 'index'])
             ->middleware('permission:view-payments');
         
+        // Get payment summary/statistics
+        Route::get('/summary', [PaymentController::class, 'summary'])
+            ->middleware('permission:view-financial-reports'); // Changed: Manager/Admin only
+        
+        // Get all payments for a specific billing
+        Route::get('/billing/{billingId}', [PaymentController::class, 'getPaymentsByBilling'])
+            ->middleware('permission:view-payments');
+        
+        // Record new payment
         Route::post('/', [PaymentController::class, 'store'])
             ->middleware('permission:process-payments');
         
+        // Get single payment details
         Route::get('/{id}', [PaymentController::class, 'show'])
             ->middleware('permission:view-payments');
         
+        // ✅ NEW: Reverse payment (Manager/Admin only)
+        Route::post('/{id}/reverse', [PaymentController::class, 'reverse'])
+            ->middleware('permission:reverse-payments')
+            ->name('payments.reverse');
+        
+        // ❌ DEPRECATED: Delete payment (returns 410 Gone now)
+        // This endpoint still exists but will reject requests
         Route::delete('/{id}', [PaymentController::class, 'destroy'])
             ->middleware('permission:process-payments');
+    });
+
+    // ========================================
+    // BILLINGS
+    // ========================================
+    Route::prefix('billings')->group(function () {
+        // List all billings with filters
+        Route::get('/', [BillingController::class, 'index'])
+            ->middleware('permission:view-billings'); // Changed: Use billing permission
+        
+        // Get billing summary/statistics
+        Route::get('/summary', [BillingController::class, 'summary'])
+            ->middleware('permission:view-financial-reports'); // Changed: Manager/Admin only
+        
+        // Get unpaid billings
+        Route::get('/unpaid', [BillingController::class, 'unpaid'])
+            ->middleware('permission:view-billings'); // Changed
+        
+        // Get single billing with all details
+        Route::get('/{id}', [BillingController::class, 'show'])
+            ->middleware('permission:view-billings'); // Changed
+        
+        // Record payment for a billing
+        Route::post('/{id}/payment', [BillingController::class, 'recordPayment'])
+            ->middleware('permission:process-payments');
+        
+        // Cancel/void a billing
+        Route::post('/{id}/cancel', [BillingController::class, 'cancel'])
+            ->middleware('permission:cancel-billings'); // Changed: Manager/Admin only
     });
     
     // ========================================
@@ -255,5 +315,27 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('roles')->group(function () {
         Route::get('/', [RoleController::class, 'index'])
             ->middleware('permission:manage-users');
+    });
+
+    // ========================================
+    // REPORTS
+    // ========================================
+    Route::prefix('reports')->group(function () {
+        // Get available filters and date presets
+        Route::get('/filters', [ReportController::class, 'filters'])
+            ->middleware('permission:view-financial-reports'); // Changed
+        
+        Route::get('/date-presets', [ReportController::class, 'datePresets'])
+            ->middleware('permission:view-financial-reports'); // Changed
+        
+        // Revenue Report
+        Route::get('/revenue', [ReportController::class, 'revenue'])
+            ->middleware('permission:view-financial-reports'); // Changed
+        
+        Route::get('/revenue/export/excel', [ReportController::class, 'exportRevenueExcel'])
+            ->middleware('permission:export-reports');
+        
+        Route::get('/revenue/export/pdf', [ReportController::class, 'exportRevenuePdf'])
+            ->middleware('permission:export-reports');
     });
 });

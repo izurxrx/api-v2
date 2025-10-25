@@ -14,26 +14,23 @@ class Facility extends Model
 
     protected $fillable = [
         'facility_type_id',
-        'booking_type',
+        'requires_entrance',
         'name',
         'quantity',
         'expected_capacity',
         'max_capacity',
         'description',
-        'is_maintenance',
-        'is_available_for_booking',
     ];
 
     protected $casts = [
-        'is_maintenance' => 'boolean',
-        'is_available_for_booking' => 'boolean',
+        'requires_entrance' => 'boolean',
     ];
 
     // Activity Log Configuration
     public function getActivitylogOptions(): LogOptions
     {
         return LogOptions::defaults()
-            ->logOnly(['name', 'quantity', 'is_maintenance', 'is_available_for_booking'])
+            ->logOnly(['name', 'quantity', 'requires_entrance'])
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs();
     }

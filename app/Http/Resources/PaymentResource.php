@@ -2,73 +2,77 @@
 
 namespace App\Http\Resources;
 
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use App\Models\Booking;
+use App\Models\GuestEntry;
 
 class PaymentResource extends JsonResource
 {
-    public function toArray($request)
+    public function toArray(Request $request): array
     {
+        $billable = $this->billing?->billable;
+        
         return [
             'id' => $this->id,
-            'transaction_reference' => $this->transaction_reference,
-            'transaction_type' => $this->transaction_type,
-            'transaction_id' => $this->transaction_id,
+            'payment_number' => $this->payment_number,
+            'billing_id' => $this->billing_id,
+            'billing_number' => $this->billing?->billing_number,
             
-            // Date and time
-            'payment_date' => $this->payment_date?->format('Y-m-d'),
-            'payment_time' => $this->payment_time ? substr($this->payment_time, 0, 5) : null, // ✅ HH:MM only
-            'payment_datetime_formatted' => $this->getFormattedDateTime(),
+            // Transaction Information
+            'transaction_type' => $billable ? class_basename(get_class($billable)) : null,
+            'transaction_id' => $billable?->id,
+            'transaction_reference' => $this->getTransactionReference($billable),
+            'guest_name' => $billable?->guest_name,
             
-            // Payment details
+            // Payment Details
+            'amount' => number_format($this->amount, 2),
+            'amount_raw' => (float) $this->amount,
+            'change_amount' => number_format($this->change_amount, 2),
+            'change_amount_raw' => (float) $this->change_amount,
             'payment_method' => $this->payment_method,
-            'amount_paid' => (float) $this->amount_paid,
-            'change_amount' => (float) $this->change_amount,
-            'payment_reference' => $this->payment_reference,
+            'payment_type' => $this->payment_type,
+            'reference_number' => $this->reference_number,
             'notes' => $this->notes,
             
-            // ✅ FIXED: received_by should be just the ID
-            'received_by' => $this->getAttributes()['received_by'] ?? $this->getAttribute('received_by'),
+            // Dates
+            'payment_date' => $this->payment_date?->format('Y-m-d H:i:s'),
+            'payment_date_formatted' => $this->payment_date?->format('M d, Y h:i A'),
             
-            // ✅ FIXED: receivedBy should be the user object
-            'receivedBy' => $this->receivedBy ? [
-                'id' => $this->receivedBy->id,
-                'full_name' => $this->receivedBy->full_name,
-                'username' => $this->receivedBy->username,
-                'contact_no' => $this->receivedBy->contact_no ?? null,
-            ] : null,
+            // Staff Information
+            'received_by' => [
+                'id' => $this->receivedBy?->id,
+                'name' => $this->receivedBy?->full_name,
+                'username' => $this->receivedBy?->username,
+            ],
             
-            // Guest name (for display)
-            'guest_name' => $this->guest_name ?? null,
+            // Billing Summary (optional - only when needed)
+            'billing' => $this->when($request->input('include_billing'), function() {
+                return [
+                    'total_amount' => number_format($this->billing->total_amount, 2),
+                    'amount_paid' => number_format($this->billing->amount_paid, 2),
+                    'balance' => number_format($this->billing->balance, 2),
+                    'payment_status' => $this->billing->payment_status,
+                ];
+            }),
             
             // Timestamps
-            'created_at' => $this->created_at?->toISOString(),
-            'updated_at' => $this->updated_at?->toISOString(),
+            'created_at' => $this->created_at?->format('Y-m-d H:i:s'),
+            'updated_at' => $this->updated_at?->format('Y-m-d H:i:s'),
         ];
     }
 
     /**
-     * Get formatted date and time (HH:MM only)
+     * Get transaction reference based on billable type
      */
-    private function getFormattedDateTime(): string
+    private function getTransactionReference($billable): ?string
     {
-        if (!$this->payment_date) {
-            return 'N/A';
-        }
-
-        $dateStr = $this->payment_date->format('M d, Y');
-        
-        if ($this->payment_time) {
-            // Extract only hours and minutes
-            $time = substr($this->payment_time, 0, 5); // "14:02:10" -> "14:02"
-            [$hours, $minutes] = explode(':', $time);
-            $hour = (int) $hours;
-            $ampm = $hour >= 12 ? 'PM' : 'AM';
-            $hour12 = $hour % 12 ?: 12;
-            $timeStr = sprintf('%d:%s %s', $hour12, $minutes, $ampm);
-            
-            return "$dateStr $timeStr";
+        if ($billable instanceof Booking) {
+            return $billable->booking_reference;
+        } elseif ($billable instanceof GuestEntry) {
+            return $billable->entry_reference;
         }
         
-        return $dateStr;
+        return null;
     }
 }

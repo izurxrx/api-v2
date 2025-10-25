@@ -226,10 +226,6 @@ class StoreGuestEntryRequest extends FormRequest
                         $validator->errors()->add('discount_id', 'Discount has expired.');
                     }
                     
-                    // ✅ Check if discount applies to correct category
-                    if ($discount->rate_category !== 'Entrance') {
-                        $validator->errors()->add('discount_id', 'This discount does not apply to entrance fees.');
-                    }
                 }
             }
 

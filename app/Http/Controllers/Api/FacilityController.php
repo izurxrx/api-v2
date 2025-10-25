@@ -19,19 +19,13 @@ class FacilityController extends Controller
             $query->where('facility_type_id', $request->facility_type_id);
         }
 
-        // ADD THIS: Filter by booking type
-        if ($request->has('booking_type')) {
-            $query->where('booking_type', $request->booking_type);
+        if ($request->has('requires_entrance')) {
+            $query->where('requires_entrance', $request->requires_entrance);
         }
 
         // ADD THIS: Get only walk-in cottages
         if ($request->has('walk_in_only')) {
             $query->availableForWalkIn();
-        }
-
-        if ($request->has('available')) {
-            $query->where('is_available_for_booking', true)
-                  ->where('is_maintenance', false);
         }
 
         if ($request->has('search')) {

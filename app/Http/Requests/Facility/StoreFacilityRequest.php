@@ -20,9 +20,7 @@ class StoreFacilityRequest extends FormRequest
             'expected_capacity' => 'required|integer|min:0',
             'max_capacity' => 'required|integer|min:0',
             'description' => 'nullable|string',
-            'booking_type' => 'required|in:walk_in,booking',
-            'is_maintenance' => 'boolean',
-            'is_available_for_booking' => 'boolean',
+            'requires_entrance' => 'boolean',
         ];
     }
 
@@ -33,8 +31,7 @@ class StoreFacilityRequest extends FormRequest
             'facility_type_id.exists' => 'Selected facility type does not exist',
             'name.required' => 'Facility name is required',
             'quantity.min' => 'Quantity must be at least 1',
-            'booking_type.required' => 'Please select booking type',
-            'booking_type.in' => 'Booking type must be either walk_in or booking',
+            'requires_entrance.required' => 'Please specify if entrance is required',
         ];
     }
 }

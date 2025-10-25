@@ -29,14 +29,11 @@ class GuestEntry extends Model
         'subtotal',
         'discount_amount',
         'total_amount',
-        'payment_status',
-        'amount_paid',
-        'balance',
+        // ❌ REMOVED: payment_status, amount_paid, balance, payment_method
         'is_checked_out',
         'checkout_datetime',
         'notes',
         'created_by',
-        'payment_method',
         'exit_date',
         'exit_time',
     ];
@@ -53,8 +50,7 @@ class GuestEntry extends Model
         'discount_amount' => 'decimal:2',
         'manual_discount_amount' => 'decimal:2',
         'total_amount' => 'decimal:2',
-        'amount_paid' => 'decimal:2',
-        'balance' => 'decimal:2',
+        // ❌ REMOVED: amount_paid, balance casts
         'is_checked_out' => 'boolean',
         'exit_date' => 'date',
         'exit_time' => 'datetime:H:i:s',
@@ -65,13 +61,16 @@ class GuestEntry extends Model
         return LogOptions::defaults()
             ->logOnly([
                 'entry_reference', 'guest_name', 'total_guests', 
-                'total_amount', 'payment_status', 'is_checked_out'
+                'total_amount', 'is_checked_out' // Removed payment_status
             ])
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs();
     }
 
-    // Relationships
+    // ========================================
+    // RELATIONSHIPS
+    // ========================================
+    
     public function details()
     {
         return $this->hasMany(GuestEntryDetail::class);
@@ -80,12 +79,6 @@ class GuestEntry extends Model
     public function facilities()
     {
         return $this->hasMany(GuestEntryFacility::class);
-    }
-
-    public function payments()
-    {
-        return $this->hasMany(Payment::class, 'transaction_id')
-                    ->where('transaction_type', 'GuestEntry');
     }
 
     public function createdBy()
@@ -102,37 +95,73 @@ class GuestEntry extends Model
     {
         return $this->hasMany(ThirdPartyService::class);
     }
-    // Helper method to recalculate totals
+    
+    /**
+     * ✅ NEW: Polymorphic relationship to billing
+     */
+    public function billing()
+    {
+        return $this->morphOne(Billing::class, 'billable');
+    }
+
+    // ========================================
+    // HELPER METHODS
+    // ========================================
+    
+    /**
+     * ✅ UPDATED: Recalculate totals (removed payment logic)
+     */
     public function recalculateTotals()
     {
         $this->entrance_subtotal = $this->details()->sum('total_amount');
         $this->facility_subtotal = $this->facilities()->sum('subtotal');
         $this->subtotal = $this->entrance_subtotal + $this->facility_subtotal;
         $this->total_amount = $this->subtotal - $this->discount_amount;
-        $this->balance = $this->total_amount - $this->amount_paid;
-        
-        if ($this->balance <= 0) {
-            $this->payment_status = 'Paid';
-        } elseif ($this->amount_paid > 0) {
-            $this->payment_status = 'Partial';
-        } else {
-            $this->payment_status = 'Unpaid';
-        }
         
         $this->save();
+        
+        // ✅ Update billing if exists
+        if ($this->billing) {
+            $this->billing->updateTotals(
+                $this->subtotal,
+                $this->discount_amount,
+                $this->total_amount
+            );
+        }
     }
 
-       // Relationships
-    public function facilityType()
+    // ========================================
+    // ACCESSOR ATTRIBUTES (for backward compatibility)
+    // ========================================
+    
+    /**
+     * ✅ NEW: Get payment status from billing
+     */
+    public function getPaymentStatusAttribute(): ?string
     {
-        return $this->belongsTo(FacilityType::class);
+        return $this->billing?->payment_status;
     }
 
-    public function rates()
+    /**
+     * ✅ NEW: Get amount paid from billing
+     */
+    public function getAmountPaidAttribute(): float
     {
-        return $this->hasMany(Rate::class);
+        return $this->billing?->amount_paid ?? 0;
     }
 
+    /**
+     * ✅ NEW: Get balance from billing
+     */
+    public function getBalanceAttribute(): float
+    {
+        return $this->billing?->balance ?? 0;
+    }
+
+    // ========================================
+    // SCOPES
+    // ========================================
+    
     public function scopeWalkIn($query)
     {
         return $query->where('booking_type', 'walk_in');
@@ -149,5 +178,4 @@ class GuestEntry extends Model
                      ->where('is_available_for_booking', true)
                      ->where('is_maintenance', false);
     }
-    
 }

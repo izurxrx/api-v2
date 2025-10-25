@@ -20,7 +20,7 @@ class UpdateFacilityRequest extends FormRequest
             'expected_capacity' => 'sometimes|integer|min:0',
             'max_capacity' => 'sometimes|integer|min:0',
             'description' => 'nullable|string',
-            'booking_type' => 'sometimes|in:walk_in,booking',
+            'requires_entrance' => 'boolean',
             'is_maintenance' => 'boolean',
             'is_available_for_booking' => 'boolean',
         ];

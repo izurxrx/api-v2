@@ -9,7 +9,7 @@ use App\Http\Requests\Booking\UpdateBookingRequest;
 use App\Http\Resources\BookingResource;
 use App\Models\Booking;
 use App\Models\Facility;
-use App\Models\Payment;
+use App\Services\BillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -17,6 +17,13 @@ use Illuminate\Support\Facades\Log;
 
 class BookingController extends Controller
 {
+    protected $billingService;
+
+    public function __construct(BillingService $billingService)
+    {
+        $this->billingService = $billingService;
+    }
+
     public function archived()
     {
         $bookings = Booking::onlyTrashed()->with([
@@ -107,16 +114,14 @@ class BookingController extends Controller
 
     public function store(StoreBookingRequest $request)
     {
-        // ✅ USE DATABASE TRANSACTION WITH LOCKING
         return DB::transaction(function () use ($request) {
             try {
                 $validated = $request->validated();
                 
-                // ✅ RE-CHECK AVAILABILITY WITH LOCK (PREVENT RACE CONDITION)
+                // ✅ RE-CHECK AVAILABILITY WITH LOCK
                 $checkInDateTime = Carbon::parse($validated['check_in_datetime']);
                 
-                foreach ($validated['facilities'] as $index => $facilityData) {
-                    // ✅ LOCK FACILITY ROW FOR UPDATE
+                foreach ($validated['facilities'] as $facilityData) {
                     $facility = Facility::lockForUpdate()->find($facilityData['facility_id']);
                     
                     if (!$facility) {
@@ -131,7 +136,6 @@ class BookingController extends Controller
                         throw new \Exception("Facility '{$facility->name}' is not available for booking.");
                     }
                     
-                    // ✅ RE-CHECK AVAILABILITY INSIDE TRANSACTION
                     $durationHours = $facilityData['duration_hours'] ?? 24;
                     $checkOut = $checkInDateTime->copy()->addHours($durationHours);
                     
@@ -154,174 +158,123 @@ class BookingController extends Controller
                 // Generate booking reference
                 $reference = $this->generateReferenceNumber();
                 
-                // Parse check-in datetime
-                $checkInDateTime = Carbon::parse($validated['check_in_datetime']);
-                
-                // Calculate facility subtotal
+                // Calculate amounts
                 $facilitySubtotal = collect($validated['facilities'])->sum('base_amount');
-                
-                // Calculate third-party services total
                 $thirdPartyServiceAmount = isset($validated['third_party_services']) 
                     ? collect($validated['third_party_services'])->sum('amount')
                     : 0;
+                $subtotal = $facilitySubtotal + $thirdPartyServiceAmount;
+                $totalAmount = $subtotal;
                 
-                // Calculate total amount
-                $totalAmount = $facilitySubtotal + $thirdPartyServiceAmount;
-                
-                // Calculate minimum deposit (50%)
-                $minimumDeposit = $totalAmount * 0.5;
-                
-                // Get payment amount
-                $amountPaid = $validated['payment']['amount_paid'] ?? 0;
-                
-                // Calculate balance
-                $balance = $totalAmount - $amountPaid;
-                
-                // Determine payment status
-                if ($amountPaid >= $totalAmount) {
-                    $paymentStatus = 'Paid';
-                } elseif ($amountPaid >= $minimumDeposit) {
-                    $paymentStatus = 'Partial';
-                } else {
-                    $paymentStatus = 'Unpaid';
-                }
-                
-                // Calculate total duration
+                // Calculate duration and checkout
                 $durationHours = collect($validated['facilities'])->sum('duration_hours');
-                
-                // Calculate check-out datetime
                 $checkOutDateTime = $durationHours > 0 
                     ? $checkInDateTime->copy()->addHours($durationHours)
                     : null;
-                
-                // Calculate cancellation deadline (72 hours before check-in)
                 $cancellationDeadline = $checkInDateTime->copy()->subHours(72);
                 
-                // Create booking
+                // ❌ REMOVED: Payment status, amount_paid, balance calculations
+                
+                // Create booking (WITHOUT payment fields)
                 $booking = Booking::create([
                     'booking_reference' => $reference,
                     'guest_name' => $validated['guest_name'],
                     'contact_number' => $validated['contact_number'],
-                    
-                    // NEW datetime fields
+                    'check_in_date' => $checkInDateTime->format('Y-m-d'),     // ✅ ADD THIS
                     'check_in_datetime' => $checkInDateTime,
+                    'check_out_date' => $checkOutDateTime?->format('Y-m-d'),  // ✅ ADD THIS
                     'check_out_datetime' => $checkOutDateTime,
                     'duration_hours' => $durationHours,
-                    
-                    // OLD fields (for backward compatibility)
-                    'facility_id' => $validated['facilities'][0]['facility_id'],
-                    'check_in_date' => $checkInDateTime->toDateString(),
-                    'check_out_date' => $checkOutDateTime ? $checkOutDateTime->toDateString() : null,
-                    'check_in_time' => $checkInDateTime->format('H:i:s'),
-                    'check_out_time' => $checkOutDateTime ? $checkOutDateTime->format('H:i:s') : null,
-                    
-                    // Guest information
-                    'number_of_guests' => $validated['number_of_guests'],
+                    'number_of_guests' => $validated['number_of_guests'] ?? 0,
                     'guest_breakdown' => $validated['guest_breakdown'] ?? null,
-                    
-                    // Financial information
-                    'facility_subtotal' => $facilitySubtotal,
-                    'subtotal' => $facilitySubtotal,
-                    'third_party_service_amount' => $thirdPartyServiceAmount,
-                    'total_amount' => $totalAmount,
-                    'amount_paid' => $amountPaid,
-                    'balance' => $balance,
-                    
-                    // Status
                     'booking_status' => 'Pending',
-                    'payment_status' => $paymentStatus,
                     'cancellation_deadline' => $cancellationDeadline,
-                    
-                    // Notes
+                    'facility_subtotal' => $facilitySubtotal,
+                    'third_party_service_amount' => $thirdPartyServiceAmount,
+                    'subtotal' => $subtotal,
+                    'total_amount' => $totalAmount,
                     'special_requests' => $validated['special_requests'] ?? null,
                     'notes' => $validated['notes'] ?? null,
-                    
-                    // Created by
                     'created_by' => auth()->id(),
                 ]);
-                
-                // Create booking facilities
+
                 foreach ($validated['facilities'] as $facilityData) {
-                    $facilityStartTime = $checkInDateTime;
-                    $facilityEndTime = $checkInDateTime->copy()->addHours($facilityData['duration_hours']);
-                    
                     $booking->facilities()->create([
                         'facility_id' => $facilityData['facility_id'],
                         'rate_id' => $facilityData['rate_id'],
                         'quantity' => $facilityData['quantity'],
-                        'start_datetime' => $facilityStartTime,
-                        'end_datetime' => $facilityEndTime,
                         'duration_hours' => $facilityData['duration_hours'],
                         'base_amount' => $facilityData['base_amount'],
+                        'start_datetime' => $facilityData['start_datetime'] ?? $checkInDateTime,  // ✅ Use from request or default
+                        'end_datetime' => $facilityData['end_datetime'] ?? $checkOutDateTime,     // ✅ Use from request or default
+                        'extension_hours' => $facilityData['extension_hours'] ?? 0,
+                        'extension_amount' => $facilityData['extension_amount'] ?? 0,
+                        'subtotal' => $facilityData['subtotal'],
                     ]);
                 }
-                
-                // Create third-party services (if any)
+
+                // Create third-party services if any
                 if (isset($validated['third_party_services'])) {
-                    foreach ($validated['third_party_services'] as $serviceData) {
+                    foreach ($validated['third_party_services'] as $service) {
                         $booking->thirdPartyServices()->create([
-                            'service_name' => $serviceData['service_name'],
-                            'amount' => $serviceData['amount'],
+                            'service_name' => $service['service_name'],
+                            'amount' => $service['amount'],
                         ]);
                     }
                 }
+
+                // ✅ NEW: Create billing record with optional payment
+                $paymentData = $validated['payment'] ?? null;
                 
-                // Create payment record
-                $paymentReference = $this->generatePaymentReference();
-                
-                Payment::create([
-                    'transaction_type' => 'Booking',
-                    'transaction_id' => $booking->id,
-                    'transaction_reference' => $paymentReference,
-                    'payment_method' => $validated['payment']['payment_method'],
-                    'amount_paid' => $amountPaid,
-                    'change_amount' => $validated['payment']['change_amount'] ?? 0,
-                    'payment_reference' => $validated['payment']['payment_reference'] ?? null,
-                    'notes' => $validated['payment']['notes'] ?? null,
-                    'payment_date' => now()->toDateString(),
-                    'payment_time' => now()->toTimeString(),
-                    'received_by' => auth()->id(),
+                try {
+                    $billing = $this->billingService->createBillingForBooking($booking, $paymentData);
+                    
+                    // Update booking status if fully paid
+                    if ($billing->payment_status === 'paid') {
+                        $booking->update(['booking_status' => 'Confirmed']);
+                    } elseif ($billing->payment_status === 'partial') {
+                        $booking->update(['booking_status' => 'Confirmed']);
+                    }
+                    
+                } catch (\Exception $e) {
+                    // If billing creation fails, rollback everything
+                    throw new \Exception('Failed to create billing: ' . $e->getMessage());
+                }
+
+                Log::info('Booking created', [
+                    'booking_id' => $booking->id,
+                    'reference' => $reference,
+                    'billing_id' => $billing->id,
+                    'created_by' => auth()->id(),
                 ]);
-                
+
                 // Load relationships
                 $booking->load([
                     'facilities.facility.facilityType',
                     'facilities.rate',
                     'thirdPartyServices',
-                    'payments',
                     'createdBy',
+                    'billing.payments' // ✅ NEW
                 ]);
-                
-                Log::info('Booking created successfully', [
-                    'booking_id' => $booking->id,
-                    'reference' => $booking->booking_reference,
-                    'user_id' => auth()->id(),
-                ]);
-                
+
                 return response()->json([
+                    'status' => 'success',
                     'message' => 'Booking created successfully',
                     'data' => new BookingResource($booking),
                 ], 201);
-                
+
             } catch (\Exception $e) {
                 Log::error('Booking creation failed', [
                     'error' => $e->getMessage(),
-                    'user_id' => auth()->id(),
                     'trace' => $e->getTraceAsString(),
+                    'user_id' => auth()->id(),
                 ]);
                 
-                // ✅ DON'T LEAK INTERNAL ERRORS
-                $message = 'Failed to create booking.';
-                if (str_contains($e->getMessage(), 'no longer has') || 
-                    str_contains($e->getMessage(), 'under maintenance') ||
-                    str_contains($e->getMessage(), 'not available')) {
-                    $message = $e->getMessage();
-                }
-                
-                throw $e; // Let transaction rollback
+                throw $e;
             }
         });
     }
+    
     public function show($id)
     {
         $booking = Booking::with([
@@ -339,35 +292,74 @@ class BookingController extends Controller
         ]);
     }
 
-    public function update(UpdateBookingRequest $request, $id)
+    /**
+     * ✅ Update booking - Only guest name allowed
+     */
+    public function update(Request $request, $id)
     {
-        $booking = Booking::findOrFail($id);
-        $validated = $request->validated();
-
-        $booking->update($validated);
-
-        if (isset($validated['total_amount']) || isset($validated['amount_paid'])) {
-            $booking->update([
-                'balance' => $booking->total_amount - $booking->amount_paid,
-                'payment_status' => $booking->amount_paid >= $booking->total_amount
-                    ? 'Paid'
-                    : 'Unpaid',
-            ]);
-        }
-
-        $booking->load(['facility.facilityType', 'createdBy']);
-
-        return response()->json([
-            'message' => 'Booking updated successfully',
-            'data' => new BookingResource($booking),
+        $validated = $request->validate([
+            'guest_name' => 'required|string|max:255',
         ]);
+
+        DB::beginTransaction();
+        try {
+            $booking = Booking::with('billing')->findOrFail($id);
+
+            // ✅ Check if booking can be modified
+            if (in_array($booking->booking_status, ['Checked_Out', 'Completed', 'Cancelled'])) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Cannot modify a booking that is already ' . $booking->booking_status,
+                ], 400);
+            }
+
+            // ✅ Update only guest name
+            $booking->update([
+                'guest_name' => $validated['guest_name'],
+            ]);
+
+            DB::commit();
+
+            Log::info('Booking guest name updated', [
+                'booking_id' => $booking->id,
+                'old_name' => $booking->getOriginal('guest_name'),
+                'new_name' => $validated['guest_name'],
+                'updated_by' => auth()->id(),
+            ]);
+
+            $booking->load([
+                'facilities.facility.facilityType',
+                'facilities.rate',
+                'billing.payments',
+                'createdBy',
+            ]);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Guest name updated successfully',
+                'data' => new BookingResource($booking),
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Booking update failed', [
+                'booking_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to update booking',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
+            ], 500);
+        }
     }
 
     public function checkIn(Request $request, $id)
     {
-        $booking = Booking::findOrFail($id);
+        $booking = Booking::with('billing')->findOrFail($id);
 
-        // ✅ CHECK CURRENT STATUS
         if ($booking->booking_status === 'Checked_In') {
             return response()->json([
                 'status' => 'error',
@@ -375,15 +367,6 @@ class BookingController extends Controller
             ], 400);
         }
 
-        // ✅ CHECK IF CANCELLED
-        if ($booking->booking_status === 'Cancelled') {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Cannot check in a cancelled booking'
-            ], 400);
-        }
-
-        // ✅ CHECK IF CHECKED OUT
         if ($booking->booking_status === 'Checked_Out') {
             return response()->json([
                 'status' => 'error',
@@ -391,32 +374,31 @@ class BookingController extends Controller
             ], 400);
         }
 
-        // ✅ CHECK PAYMENT STATUS (Optional: require minimum deposit)
-        if ($booking->payment_status === 'Unpaid' && $booking->amount_paid < $booking->minimum_deposit) {
+        // ✅ UPDATED: Check payment via billing
+        $billing = $booking->billing;
+        if (!$billing || $billing->amount_paid < $booking->minimum_deposit) {
             return response()->json([
                 'status' => 'error',
                 'message' => sprintf(
                     'Cannot check in. Minimum deposit of ₱%.2f required. Only ₱%.2f paid.',
-                    $booking->minimum_deposit ?? ($booking->total_amount * 0.5),
-                    $booking->amount_paid
+                    $booking->minimum_deposit,
+                    $billing?->amount_paid ?? 0
                 ),
-                'required_deposit' => $booking->minimum_deposit ?? ($booking->total_amount * 0.5),
-                'amount_paid' => $booking->amount_paid,
-                'balance' => $booking->balance,
+                'required_deposit' => $booking->minimum_deposit,
+                'amount_paid' => $billing?->amount_paid ?? 0,
+                'balance' => $billing?->balance ?? $booking->total_amount,
             ], 400);
         }
 
-        // ✅ CHECK CHECK-IN TIME (Optional: not too early)
         $checkInTime = Carbon::parse($booking->check_in_datetime);
         if (now()->lt($checkInTime->subHours(2))) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Check-in time has not arrived yet. Please check in closer to your scheduled time.',
+                'message' => 'Check-in time has not arrived yet.',
                 'check_in_time' => $booking->check_in_datetime,
             ], 400);
         }
 
-        // ✅ PERFORM CHECK-IN
         $booking->update([
             'booking_status' => 'Checked_In',
             'actual_check_in_datetime' => now(),
@@ -432,7 +414,7 @@ class BookingController extends Controller
         return response()->json([
             'status' => 'success',
             'message' => 'Guest checked in successfully',
-            'data' => new BookingResource($booking->fresh(['checkedInBy'])),
+            'data' => new BookingResource($booking->fresh(['checkedInBy', 'billing'])),
         ]);
     }
 
@@ -466,103 +448,111 @@ class BookingController extends Controller
         ]);
     }
 
-    public function cancel(CancelBookingRequest $request, $id)
+    /**
+     * ✅ Cancel booking with payment logic
+     */
+    public function cancel(Request $request, $id)
     {
-        return DB::transaction(function () use ($request, $id) {
-            try {
-                $booking = Booking::findOrFail($id);
-                $validated = $request->validated();
-                
-                // ✅ CHECK IF ALREADY CANCELLED
-                if ($booking->booking_status === 'Cancelled') {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'Booking is already cancelled'
-                    ], 400);
-                }
+        $validated = $request->validate([
+            'reason' => 'required|string|max:500',
+        ]);
 
-                // ✅ CHECK IF CHECKED IN
-                if ($booking->booking_status === 'Checked_In') {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'Cannot cancel a booking that is already checked in. Please check out first.'
-                    ], 400);
-                }
+        DB::beginTransaction();
+        try {
+            $booking = Booking::with(['billing.payments', 'facilities'])->findOrFail($id);
 
-                // ✅ CHECK IF CHECKED OUT
-                if ($booking->booking_status === 'Checked_Out') {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'Cannot cancel a completed booking'
-                    ], 400);
-                }
-
-                // ✅ CHECK CANCELLATION DEADLINE
-                if (now()->gt($booking->cancellation_deadline)) {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'Cancellation deadline has passed. No refund will be issued.',
-                        'cancellation_deadline' => $booking->cancellation_deadline,
-                        'current_time' => now(),
-                    ], 400);
-                }
-
-                // ✅ CHECK IF USER CAN CANCEL (Optional)
-                if (!auth()->user()->can('manage-bookings') && $booking->created_by !== auth()->id()) {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => 'You do not have permission to cancel this booking'
-                    ], 403);
-                }
-                
-                // Update booking status to Cancelled
-                $booking->update([
-                    'booking_status' => 'Cancelled',
-                    'cancellation_reason' => $validated['cancellation_reason'],
-                    'cancelled_at' => now(),
-                ]);
-
-                // Note: NO REFUND - Deposit is forfeited as per business rules
-                // Balance becomes 0 (no longer owed)
-                $booking->balance = 0;
-                $booking->save();
-
-                Log::info('Booking cancelled', [
-                    'booking_id' => $booking->id,
-                    'reference' => $booking->booking_reference,
-                    'cancelled_by' => auth()->id(),
-                    'reason' => $validated['cancellation_reason'],
-                ]);
-
-                $booking->load([
-                    'facilities.facility.facilityType',
-                    'facilities.rate',
-                    'thirdPartyServices',
-                    'createdBy',
-                    'payments'
-                ]);
-
+            // ✅ Check if booking can be cancelled
+            if (in_array($booking->booking_status, ['Checked_Out', 'Completed', 'Cancelled'])) {
                 return response()->json([
-                    'status' => 'success',
-                    'message' => 'Booking cancelled successfully. No refund will be issued as per policy.',
-                    'data' => new BookingResource($booking),
-                ]);
-
-            } catch (\Exception $e) {
-                Log::error('Booking cancellation failed', [
-                    'booking_id' => $id,
-                    'error' => $e->getMessage(),
-                    'user_id' => auth()->id(),
-                ]);
-                
-                throw $e;
+                    'status' => 'error',
+                    'message' => 'Cannot cancel a booking that is already ' . $booking->booking_status,
+                ], 400);
             }
-        });
+
+            // ✅ If already checked in, cannot cancel
+            if ($booking->booking_status === 'Checked_In') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Cannot cancel a booking that is already checked in. Please process checkout instead.',
+                ], 400);
+            }
+
+            $billing = $booking->billing;
+            $hasDownpayment = $billing && $billing->is_downpayment_paid;
+
+            // ✅ Update booking status
+            $booking->update([
+                'booking_status' => 'Cancelled',
+                'cancellation_reason' => $validated['reason'],
+                'cancelled_by' => auth()->id(),
+                'cancelled_at' => now(),
+            ]);
+
+            // ✅ Update billing
+            if ($billing) {
+                if ($hasDownpayment) {
+                    // ✅ Downpayment is non-refundable
+                    $billing->update([
+                        'billing_status' => 'cancelled',
+                        'cancellation_reason' => 'Booking cancelled. Downpayment is non-refundable.',
+                        'cancelled_by' => auth()->id(),
+                    ]);
+
+                    $message = 'Booking cancelled. Downpayment of ₱' . number_format($billing->downpayment_paid, 2) . ' is non-refundable.';
+                } else {
+                    // ✅ No downpayment - free cancellation
+                    $billing->update([
+                        'billing_status' => 'cancelled',
+                        'payment_status' => 'cancelled',
+                        'cancellation_reason' => 'Booking cancelled before downpayment.',
+                        'cancelled_by' => auth()->id(),
+                    ]);
+
+                    $message = 'Booking cancelled successfully. No charges applied.';
+                }
+            } else {
+                $message = 'Booking cancelled successfully.';
+            }
+
+            DB::commit();
+
+            Log::info('Booking cancelled', [
+                'booking_id' => $booking->id,
+                'had_downpayment' => $hasDownpayment,
+                'downpayment_amount' => $billing?->downpayment_paid ?? 0,
+                'reason' => $validated['reason'],
+                'cancelled_by' => auth()->id(),
+            ]);
+
+            $booking->load([
+                'facilities.facility.facilityType',
+                'billing.payments',
+                'createdBy',
+                'cancelledBy',
+            ]);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => $message,
+                'data' => new BookingResource($booking),
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Booking cancellation failed', [
+                'booking_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to cancel booking',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
+            ], 500);
+        }
     }
 
-    /**
-     * Generate booking reference number
-     */
     private function generateReferenceNumber()
     {
         $date = now()->format('Ymd');
@@ -571,17 +561,200 @@ class BookingController extends Controller
     }
 
     /**
-     * Generate payment reference number
+     * ✅ Record downpayment for booking
      */
-    private function generatePaymentReference(): string
+    public function recordDownpayment(Request $request, $id)
     {
-        $date = now()->format('Ymd');
-        $lastPayment = Payment::whereDate('created_at', today())
-            ->orderBy('id', 'desc')
-            ->first();
-        
-        $sequence = $lastPayment ? ((int) substr($lastPayment->transaction_reference, -4)) + 1 : 1;
-        
-        return 'PAY' . $date . str_pad($sequence, 4, '0', STR_PAD_LEFT);
+        $validated = $request->validate([
+            'amount_paid' => 'required|numeric|min:0.01',
+            'payment_method' => 'required|in:cash,gcash,bank_transfer,credit_card,debit_card,other',
+            'change_amount' => 'nullable|numeric|min:0',
+            'reference_number' => 'nullable|string|max:255',
+            'notes' => 'nullable|string|max:500',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $booking = Booking::with('billing')->findOrFail($id);
+
+            if (!$booking->billing) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Billing not found for this booking',
+                ], 404);
+            }
+
+            $billing = $booking->billing;
+
+            // ✅ Check if booking is in valid state
+            if ($booking->booking_status !== 'Pending') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Can only record downpayment for pending bookings',
+                ], 400);
+            }
+
+            // ✅ Check if downpayment already paid
+            if ($billing->is_downpayment_paid) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Downpayment has already been paid for this booking',
+                ], 400);
+            }
+
+            $amountPaid = $validated['amount_paid'];
+
+            // ✅ Validate downpayment amount
+            if ($amountPaid < $billing->downpayment_amount) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => sprintf(
+                        'Downpayment amount (₱%.2f) is less than required (₱%.2f)',
+                        $amountPaid,
+                        $billing->downpayment_amount
+                    ),
+                    'required_downpayment' => $billing->downpayment_amount,
+                ], 400);
+            }
+
+            // ✅ Record payment
+            $paymentData = [
+                'amount_paid' => $amountPaid,
+                'payment_method' => $validated['payment_method'],
+                'change_amount' => $validated['change_amount'] ?? 0,
+                'reference_number' => $validated['reference_number'] ?? null,
+                'notes' => $validated['notes'] ?? 'Downpayment',
+            ];
+
+            $payment = $this->billingService->recordPayment($billing, $paymentData, 'downpayment');
+
+            // ✅ Update billing downpayment status
+            $billing->update([
+                'downpayment_paid' => $billing->downpayment_paid + $amountPaid,
+                'is_downpayment_paid' => true,
+            ]);
+
+            // ✅ Update booking status to Confirmed
+            $booking->update([
+                'booking_status' => 'Confirmed',
+            ]);
+
+            DB::commit();
+
+            Log::info('Downpayment recorded', [
+                'booking_id' => $booking->id,
+                'amount' => $amountPaid,
+                'billing_id' => $billing->id,
+                'received_by' => auth()->id(),
+            ]);
+
+            $booking->load([
+                'facilities.facility.facilityType',
+                'billing.payments',
+                'createdBy',
+            ]);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Downpayment recorded successfully. Booking is now confirmed.',
+                'data' => new BookingResource($booking),
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Downpayment recording failed', [
+                'booking_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to record downpayment',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
+            ], 500);
+        }
+    }
+
+    /**
+     * ✅ Mark booking as no-show (guest didn't show up)
+     */
+    public function markNoShow(Request $request, $id)
+    {
+        $validated = $request->validate([
+            'notes' => 'nullable|string|max:500',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $booking = Booking::with('billing')->findOrFail($id);
+
+            // ✅ Check if booking is in valid state
+            if (!in_array($booking->booking_status, ['Pending', 'Confirmed'])) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Can only mark Pending or Confirmed bookings as no-show',
+                ], 400);
+            }
+
+            // ✅ Check if check-in date has passed
+            if (now()->lt($booking->check_in_datetime)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Cannot mark as no-show before check-in date',
+                ], 400);
+            }
+
+            // ✅ Update booking status
+            $booking->update([
+                'booking_status' => 'No_Show',
+                'notes' => $validated['notes'] ?? 'Guest did not show up. Full payment still required.',
+            ]);
+
+            // ✅ Guest must still pay full amount (no-show policy)
+            $billing = $booking->billing;
+            if ($billing && $billing->balance > 0) {
+                $billing->update([
+                    'notes' => 'No-show: Guest must pay full amount for all reserved days.',
+                    'billing_status' => 'active',
+                ]);
+            }
+
+            DB::commit();
+
+            Log::warning('Booking marked as no-show', [
+                'booking_id' => $booking->id,
+                'booking_reference' => $booking->booking_reference,
+                'guest_name' => $booking->guest_name,
+                'balance_due' => $billing?->balance ?? 0,
+                'marked_by' => auth()->id(),
+            ]);
+
+            $booking->load([
+                'facilities.facility.facilityType',
+                'billing.payments',
+                'createdBy',
+            ]);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Booking marked as no-show. Guest must still pay for all reserved days.',
+                'data' => new BookingResource($booking),
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('No-show marking failed', [
+                'booking_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to mark booking as no-show',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
+            ], 500);
+        }
     }
 }

@@ -11,6 +11,16 @@ class BookingResource extends JsonResource
     {
         return [
             'id' => $this->id,
+            'booking_type' => $this->booking_type,
+            'entrance_rate_id' => $this->entrance_rate_id,
+            'entrance_rate' => $this->whenLoaded('entranceRate', function() {
+                return $this->entranceRate ? [
+                    'id' => $this->entranceRate->id,
+                    'rate_name' => $this->entranceRate->rate_name,
+                    'duration' => $this->entranceRate->duration,
+                    'base_price' => (float) $this->entranceRate->base_price,
+                ] : null;
+            }),
             'booking_reference' => $this->booking_reference,
             'guest_name' => $this->guest_name,
             'contact_number' => $this->contact_number,
@@ -143,6 +153,23 @@ class BookingResource extends JsonResource
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
             'deleted_at' => $this->deleted_at?->toIso8601String(),
+
+            'discount_mode' => $this->discount_mode,
+            'discount_id' => $this->discount_id,
+            'discount' => $this->whenLoaded('discount', function() {
+                return $this->discount ? [
+                    'id' => $this->discount->id,
+                    'name' => $this->discount->discount_name,
+                    'category' => $this->discount->category,
+                    'type' => $this->discount->discount_type,
+                    'value' => (float) $this->discount->value,
+                    'formatted_value' => $this->discount->type === 'Percentage'
+                        ? rtrim(rtrim(number_format($this->discount->value, 2), '0'), '.') . '%'
+                        : '₱' . number_format($this->discount->value, 2),
+                ] : null;
+            }),
+            'manual_discount_amount' => (float) $this->manual_discount_amount,
+            'discount_amount' => (float) $this->discount_amount,
         ];
     }
 }
