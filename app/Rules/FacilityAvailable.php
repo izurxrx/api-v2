@@ -45,7 +45,7 @@ class FacilityAvailable implements ValidationRule
                 $fail('End time must be after start time.');
                 return;
             }
-            
+                
             // ✅ Validate not too far in the future (e.g., max 2 years)
             if ($start->gt(now()->addYears(2))) {
                 $fail('Cannot book more than 2 years in advance.');

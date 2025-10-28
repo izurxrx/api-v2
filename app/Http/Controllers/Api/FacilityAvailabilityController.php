@@ -71,22 +71,7 @@ class FacilityAvailabilityController extends Controller
             ],
         ]);
     }
-
-    /**
-     * Check availability for multiple facilities at once
-     * 
-     * POST /api/facilities/check-availability
-     * 
-     * Body:
-     * {
-     *   "start_datetime": "2025-10-21 14:00:00",
-     *   "end_datetime": "2025-10-21 18:00:00",
-     *   "facilities": [
-     *     {"facility_id": 1, "quantity": 2},
-     *     {"facility_id": 2, "quantity": 1}
-     *   ]
-     * }
-     */
+    
     public function checkMultipleFacilities(Request $request)
     {
         $request->validate([
@@ -185,7 +170,7 @@ class FacilityAvailabilityController extends Controller
                             'status' => $booking->booking_status,
                         ];
                     }),
-                    'guest_entries' => $conflicts['rentals']->map(function($entry) {
+                    'guest_entries' => $conflicts['guest_entries']->map(function($entry) {
                         return [
                             'id' => $entry->id,
                             'entry_reference' => $entry->entry_reference,

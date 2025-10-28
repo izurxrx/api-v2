@@ -2,13 +2,12 @@
 
 namespace App\Http\Requests\GuestEntry;
 
-use App\Models\Rate;
 use Illuminate\Foundation\Http\FormRequest;
 use App\Rules\FacilityAvailable;
 use App\Models\Facility;
+use App\Models\Rate;
 use App\Models\Discount;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\Log;
 
 class StoreGuestEntryRequest extends FormRequest
 {
@@ -20,304 +19,415 @@ class StoreGuestEntryRequest extends FormRequest
     public function rules()
     {
         return [
-            // Entry Information
-            'entry_date' => 'required|date|date_format:Y-m-d|before_or_equal:today|after:' . now()->subDays(7)->format('Y-m-d'),
-            'entry_time' => 'required|date_format:H:i',
+            // ✅ ENTRANCE RATE (required for walk-in swimming)
+            'entrance_rate_id' => [
+                'required',
+                'exists:rates,id',
+                function ($attribute, $value, $fail) {
+                    if ($value) {
+                        $rate = Rate::find($value);
+                        if (!$rate || $rate->rate_category !== 'Entrance') {
+                            $fail('Selected rate must be an entrance rate (Day, Night, or Day & Night).');
+                        }
+                    }
+                },
+            ],
+            
+            // ✅ GUEST INFORMATION
             'guest_name' => 'required|string|min:2|max:255',
-            'contact_number' => 'required|string|regex:/^09[0-9]{9}$/|max:20',
-            'total_guests' => 'required|integer|min:1|max:1000',
+            'contact_number' => 'nullable|string|regex:/^09[0-9]{9}$/|max:20',
+            'entry_date' => 'required|date|date_format:Y-m-d|before_or_equal:today',
+            'check_in_time' => 'nullable|date_format:H:i',
+            'number_of_guests' => 'required|integer|min:1|max:1000',
             
-            // Guest Details (entrance fees)
-            'details' => 'required|array|min:1|max:50',
-            'details.*.guest_type_name' => 'required|string|min:2|max:100',
-            'details.*.rate_id' => 'required|integer|exists:rates,id',
-            'details.*.guest_count' => 'required|integer|min:1|max:1000',
-            'details.*.discount_mode' => 'nullable|in:Direct,None',
-            'details.*.discount_id' => 'nullable|integer|exists:discounts,id',
+            // ✅ GUEST DETAILS (for Direct discounts per guest)
+            'guest_details' => 'required|array|min:1',
+            'guest_details.*.guest_type_name' => 'required|string|in:Regular,Senior Citizen,Children below 2 yrs old,Others',
+            'guest_details.*.guest_count' => 'required|integer|min:1',
+            'guest_details.*.discount_id' => 'nullable|exists:discounts,id',
             
-            // Facilities
-            'facilities' => 'required|array|min:1|max:50',
-            'facilities.*.facility_id' => 'required|integer|exists:facilities,id',
-            'facilities.*.rate_id' => 'required|integer|exists:rates,id',
-            'facilities.*.quantity' => 'required|integer|min:1|max:100',
-            'facilities.*.guest_count' => 'required|integer|min:1|max:1000',
-            'facilities.*.rate_price' => 'required|numeric|min:0|max:9999999.99',
-            'facilities.*.subtotal' => 'required|numeric|min:0|max:9999999.99',
-            'facilities.*.start_datetime' => 'required|date_format:Y-m-d H:i:s',
-            'facilities.*.end_datetime' => 'required|date_format:Y-m-d H:i:s',
+            // ✅ FACILITIES (cottages for walk-in swimming)
+            'facilities' => 'nullable|array',
+            'facilities.*.facility_id' => [
+                'required_with:facilities',
+                'integer',
+                'exists:facilities,id',
+                'distinct',
+                function ($attribute, $value, $fail) {
+                    if ($value) {
+                        $facility = Facility::find($value);
+                        // Walk-ins can only book cottages
+                        if ($facility && $facility->facilityType) {
+                            if ($facility->facilityType->name !== 'Cottages') {
+                                $fail('Walk-in guests can only book cottages.');
+                            }
+                        }
+                    }
+                },
+            ],
+            'facilities.*.rate_id' => 'required_with:facilities|exists:rates,id',
+            'facilities.*.quantity' => 'required_with:facilities|integer|min:1|max:100',
             
-            // Third Party Services (Optional)
-            'third_party_services' => 'nullable|array|max:50',
-            'third_party_services.*.service_name' => 'required|string|min:2|max:255',
-            'third_party_services.*.amount' => 'required|numeric|min:0.01|max:9999999.99',
+            // ✅ SEASONAL DISCOUNT (optional, auto-applies if active)
+            'seasonal_discount_id' => [
+                'nullable',
+                'exists:discounts,id',
+                function ($attribute, $value, $fail) {
+                    if ($value) {
+                        $discount = Discount::find($value);
+                        if ($discount && $discount->category !== 'Seasonal_Discount') {
+                            $fail('Selected discount must be a seasonal discount.');
+                        }
+                    }
+                },
+            ],
             
-            // Discount
-            'discount_mode' => 'required|in:None,Seasonal,Manual,Direct',
-            'discount_id' => 'nullable|integer|exists:discounts,id',
+            // ✅ MANUAL DISCOUNT (optional staff discount)
             'manual_discount_amount' => 'nullable|numeric|min:0|max:9999999.99',
             
-            // Payment
-            'payment.payment_method' => 'required|string|min:2|max:50',
+            // ✅ PAYMENT (required - full payment for walk-ins)
+            'payment' => 'required|array',
+            'payment.payment_method' => 'required|in:Cash,Gcash,Others',
             'payment.amount_paid' => 'required|numeric|min:0.01|max:9999999.99',
             'payment.change_amount' => 'nullable|numeric|min:0|max:9999999.99',
-            'payment.payment_reference' => 'nullable|string|max:255',
-            'payment.notes' => 'nullable|string|max:1000',
+            'payment.reference_number' => 'nullable|string|max:255',
             
+            // ✅ NOTES
             'notes' => 'nullable|string|max:1000',
         ];
+    }
+
+    protected function prepareForValidation()
+    {
+        $data = [];
+        
+        // Sanitize guest name
+        if ($this->has('guest_name')) {
+            $data['guest_name'] = trim(strip_tags($this->guest_name));
+        }
+        
+        // Format contact number
+        if ($this->has('contact_number')) {
+            $data['contact_number'] = preg_replace('/[^0-9]/', '', $this->contact_number);
+        }
+        
+        // Set entry date to today if not provided
+        if (!$this->has('entry_date')) {
+            $data['entry_date'] = Carbon::today()->toDateString();
+        }
+        
+        // Set check-in time to now if not provided
+        if (!$this->has('check_in_time')) {
+            $data['check_in_time'] = Carbon::now()->format('H:i');
+        }
+        
+        // Calculate total guests from guest_details
+        if ($this->has('guest_details')) {
+            $totalGuests = 0;
+            foreach ($this->guest_details as $detail) {
+                $totalGuests += $detail['guest_count'] ?? 0;
+            }
+            
+            if ($totalGuests > 0 && !$this->has('number_of_guests')) {
+                $data['number_of_guests'] = $totalGuests;
+            }
+        }
+        
+        // // Auto-detect active seasonal discount if not specified
+        // if (!$this->has('seasonal_discount_id')) {
+        //     $today = Carbon::today();
+        //     $activeSeasonalDiscount = Discount::where('category', 'Seasonal_Discount')
+        //         ->where('is_active', true)
+        //         ->where(function($q) use ($today) {
+        //             $q->whereNull('valid_from')
+        //               ->orWhere('valid_from', '<=', $today);
+        //         })
+        //         ->where(function($q) use ($today) {
+        //             $q->whereNull('valid_until')
+        //               ->orWhere('valid_until', '>=', $today);
+        //         })
+        //         ->first();
+            
+        //     if ($activeSeasonalDiscount) {
+        //         $data['seasonal_discount_id'] = $activeSeasonalDiscount->id;
+        //     }
+        // }
+        
+        $this->merge($data);
     }
 
     public function withValidator($validator)
     {
         $validator->after(function ($validator) {
             
-            // ✅ VALIDATE ENTRY DATE/TIME
-            try {
+            // =====================================
+            // ENTRANCE RATE VALIDATION
+            // =====================================
+            if ($this->entrance_rate_id) {
+                $entranceRate = Rate::find($this->entrance_rate_id);
+                if (!$entranceRate) {
+                    return;
+                }
+                
+                // Validate time slot matches current time
+                $now = Carbon::now();
+                $currentHour = $now->hour;
+                
+                if (str_contains($entranceRate->rate_name, 'Day Rate')) {
+                    // Day Rate: 8am-5pm
+                    if ($currentHour < 8 || $currentHour >= 17) {
+                        $validator->errors()->add('entrance_rate_id',
+                            'Day Rate is only available from 8:00 AM to 5:00 PM.');
+                    }
+                } elseif (str_contains($entranceRate->rate_name, 'Night Rate')) {
+                    // Night Rate: 5pm-10pm
+                    if ($currentHour < 17 || $currentHour >= 22) {
+                        $validator->errors()->add('entrance_rate_id',
+                            'Night Rate is only available from 5:00 PM to 10:00 PM.');
+                    }
+                }
+                // Day & Night rate is available all day
+            }
+            
+            // =====================================
+            // GUEST DETAILS VALIDATION
+            // =====================================
+            if ($this->has('guest_details')) {
+                $totalFromDetails = 0;
+                $hasDirectDiscounts = false;
+                
+                foreach ($this->guest_details as $index => $detail) {
+                    $guestCount = $detail['guest_count'] ?? 0;
+                    $totalFromDetails += $guestCount;
+                    
+                    // Check if discount is valid Direct type
+                    if (isset($detail['discount_id']) && $detail['discount_id']) {
+                        $discount = Discount::find($detail['discount_id']);
+                        if (!$discount) {
+                            $validator->errors()->add("guest_details.{$index}.discount_id",
+                                'Invalid discount selected.');
+                        } elseif ($discount->category !== 'Direct_Discount') {
+                            $validator->errors()->add("guest_details.{$index}.discount_id",
+                                'Only Direct discounts can be applied per guest type.');
+                        } elseif (!$discount->is_active) {
+                            $validator->errors()->add("guest_details.{$index}.discount_id",
+                                'Selected discount is not active.');
+                        }
+                        
+                        $hasDirectDiscounts = true;
+                    }
+                }
+                
+                // Validate total matches
+                if ($totalFromDetails !== $this->number_of_guests) {
+                    $validator->errors()->add('guest_details',
+                        "Guest details total ({$totalFromDetails}) must equal number of guests ({$this->number_of_guests}).");
+                }
+                
+                // Check discount stacking rules
+                if ($hasDirectDiscounts && $this->seasonal_discount_id) {
+                    // Direct + Seasonal is NOT allowed
+                    $validator->errors()->add('seasonal_discount_id',
+                        'Cannot apply both Direct (per-guest) and Seasonal discounts. Remove one or use Manual discount instead.');
+                }
+            }
+            
+            // =====================================
+            // FACILITY AVAILABILITY
+            // =====================================
+            if ($this->has('facilities')) {
                 $entryDate = Carbon::parse($this->entry_date);
-                $entryTime = $this->entry_time ?? '00:00';
-                $entryDateTime = Carbon::parse("{$entryDate->format('Y-m-d')} {$entryTime}");
+                $checkInTime = $this->check_in_time ?: Carbon::now()->format('H:i');
+                $checkIn = Carbon::parse("{$entryDate->toDateString()} {$checkInTime}");
                 
-                // ✅ USE ENTRY DATE (not "today") for availability check
-                $startOfDay = $entryDate->copy()->startOfDay();
-                $endOfDay = $entryDate->copy()->endOfDay();
+                // For walk-ins, assume they stay until closing (10pm)
+                $checkOut = Carbon::parse("{$entryDate->toDateString()} 22:00");
                 
-                // ✅ Check if entry is too old (max 7 days backdating)
-                if ($entryDateTime->lt(now()->subDays(7))) {
-                    $validator->errors()->add(
-                        'entry_date',
-                        'Cannot create entries older than 7 days.'
-                    );
-                }
-                
-                // ✅ Check if entry is in future (walk-ins should be same-day or backdated)
-                if ($entryDateTime->gt(now()->addHours(2))) {
-                    $validator->errors()->add(
-                        'entry_date',
-                        'Walk-in entries cannot be scheduled in the future. Please use the booking system.'
-                    );
-                }
-                
-            } catch (\Exception $e) {
-                $validator->errors()->add('entry_date', 'Invalid entry date/time format.');
-                return;
-            }
-            
-            // ✅ VALIDATE TOTAL GUESTS MATCHES DETAILS
-            if ($this->has('details') && $this->has('total_guests')) {
-                $detailsTotal = array_sum(array_column($this->details, 'guest_count'));
-                if ($detailsTotal != $this->total_guests) {
-                    $validator->errors()->add(
-                        'total_guests',
-                        "Total guests ({$this->total_guests}) doesn't match sum of guest details ({$detailsTotal})."
-                    );
-                }
-            }
-            
-            // ✅ CHECK FOR DUPLICATE FACILITIES
-            if ($this->has('facilities')) {
-                $facilityIds = array_column($this->facilities, 'facility_id');
-                $duplicates = array_diff_assoc($facilityIds, array_unique($facilityIds));
-                
-                if (!empty($duplicates)) {
-                    $validator->errors()->add(
-                        'facilities',
-                        'Duplicate facilities detected. Each facility can only be added once.'
-                    );
-                }
-            }
-
-            // ✅ VALIDATE FACILITIES
-            if ($this->has('facilities')) {
                 foreach ($this->facilities as $index => $facilityData) {
                     $facility = Facility::find($facilityData['facility_id']);
                     
-                    if (!$facility) {
-                        $validator->errors()->add(
-                            "facilities.{$index}.facility_id",
-                            'Invalid facility selected.'
-                        );
+                    if (!$facility) continue;
+                    
+                    // ✅ FIXED: Check if facility is active (not soft-deleted)
+                    if ($facility->trashed()) {
+                        $validator->errors()->add("facilities.{$index}.facility_id",
+                            "Facility '{$facility->name}' is not available for booking.");
                         continue;
                     }
 
-                    // ✅ Check maintenance
-                    if ($facility->is_maintenance) {
-                        $validator->errors()->add(
-                            "facilities.{$index}.facility_id",
-                            "Facility '{$facility->name}' is currently under maintenance."
-                        );
+                    // ✅ FIXED: Check if facility has any units
+                    if ($facility->quantity <= 0) {
+                        $validator->errors()->add("facilities.{$index}.facility_id",
+                            "Facility '{$facility->name}' has no available units.");
                         continue;
-                    }
-
-                    // ✅ Check available for booking
-                    if (!$facility->is_available_for_booking) {
-                        $validator->errors()->add(
-                            "facilities.{$index}.facility_id",
-                            "Facility '{$facility->name}' is not available for walk-in."
-                        );
-                        continue;
-                    }
-
-                    // ✅ Validate facility type (walk-ins only)
-                    if ($facility->booking_type === 'booking') {
-                        $validator->errors()->add(
-                            "facilities.{$index}.facility_id",
-                            "Facility '{$facility->name}' requires advance booking. Please use the booking system."
-                        );
-                        continue;
-                    }
-
-                    // ✅ VALIDATE QUANTITY DOESN'T EXCEED TOTAL
-                    $requestedQuantity = $facilityData['quantity'] ?? 1;
-                    if ($requestedQuantity > $facility->quantity) {
-                        $validator->errors()->add(
-                            "facilities.{$index}.quantity",
-                            "Requested quantity ({$requestedQuantity}) exceeds total units ({$facility->quantity}) for '{$facility->name}'."
-                        );
-                        continue;
-                    }
-
-                    // ✅ Check availability (walk-ins occupy full day)
-                    try {
-                        $availabilityRule = new FacilityAvailable(
-                            $facility->id,
-                            $startOfDay,
-                            $endOfDay,
-                            $requestedQuantity
-                        );
-
-                        $availabilityRule->validate(
-                            "facilities.{$index}.facility_id",
-                            $facility->id,
-                            function($message) use ($validator, $index) {
-                                $validator->errors()->add("facilities.{$index}.facility_id", $message);
-                            }
-                        );
-                    } catch (\Exception $e) {
-                        Log::error('Facility availability check failed', [
-                            'facility_id' => $facility->id,
-                            'error' => $e->getMessage()
-                        ]);
-                        $validator->errors()->add(
-                            "facilities.{$index}.facility_id",
-                            "Error checking availability. Please try again."
-                        );
-                    }
-                }
-            }
-
-            // ✅ VALIDATE DISCOUNT
-            if ($this->discount_mode === 'Seasonal' && $this->discount_id) {
-                $discount = Discount::find($this->discount_id);
-                
-                if (!$discount) {
-                    $validator->errors()->add('discount_id', 'Selected discount does not exist.');
-                } else {
-                    // ✅ Check if discount is active
-                    if (!$discount->is_active) {
-                        $validator->errors()->add('discount_id', 'Selected discount is not active.');
                     }
                     
-                    // ✅ Check if discount is valid for today
-                    $today = now()->format('Y-m-d');
-                    if ($discount->valid_from && $today < $discount->valid_from) {
-                        $validator->errors()->add('discount_id', 'Discount is not yet valid.');
-                    }
-                    if ($discount->valid_until && $today > $discount->valid_until) {
-                        $validator->errors()->add('discount_id', 'Discount has expired.');
-                    }
+                    // Check availability
+                    $availabilityRule = new FacilityAvailable(
+                        $facility->id,
+                        $checkIn,
+                        $checkOut,
+                        $facilityData['quantity']
+                    );
                     
-                }
-            }
-
-            // ✅ VALIDATE PAYMENT (FULL PAYMENT REQUIRED FOR WALK-INS)
-            if ($this->has('payment') && $this->has('facilities')) {
-                $facilityTotal = array_sum(array_column($this->facilities, 'subtotal'));
-                
-                $entranceTotal = 0;
-                if ($this->has('details')) {
-                    foreach ($this->details as $detail) {
-                        $rate = Rate::find($detail['rate_id']);
-                        if ($rate) {
-                            $subtotal = $rate->base_price * $detail['guest_count'];
-                            
-                            // Apply direct discount if any
-                            if (($detail['discount_mode'] ?? 'None') === 'Direct' && isset($detail['discount_id'])) {
-                                $discount = Discount::find($detail['discount_id']);
-                                if ($discount && $discount->is_active) {
-                                    if ($discount->type === 'Percentage') {
-                                        $subtotal -= ($subtotal * $discount->value / 100);
-                                    } else {
-                                        $subtotal -= min($discount->value, $subtotal);
-                                    }
-                                }
-                            }
-                            
-                            $entranceTotal += $subtotal;
+                    $availabilityRule->validate(
+                        "facilities.{$index}.facility_id",
+                        $facility->id,
+                        function($message) use ($validator, $index, $facility) {
+                            $validator->errors()->add("facilities.{$index}.facility_id",
+                                "{$facility->name}: {$message}");
                         }
-                    }
-                }
-                
-                // Apply seasonal/manual discount
-                $discountAmount = 0;
-                if ($this->discount_mode === 'Seasonal' && $this->discount_id) {
-                    $discount = Discount::where('id', $this->discount_id)
-                        ->where('is_active', true)
-                        ->first();
-                        
-                    if ($discount) {
-                        if ($discount->type === 'Percentage') {
-                            $discountAmount = ($entranceTotal * $discount->value / 100);
-                        } else {
-                            $discountAmount = min($discount->value, $entranceTotal);
-                        }
-                    }
-                } elseif ($this->discount_mode === 'Manual') {
-                    $discountAmount = min(
-                        $this->manual_discount_amount ?? 0,
-                        $entranceTotal + $facilityTotal  // Can't discount more than total
-                    );
-                }
-                
-                $servicesTotal = 0;
-                if ($this->has('third_party_services')) {
-                    $servicesTotal = array_sum(array_column($this->third_party_services, 'amount'));
-                }
-                
-                $totalAmount = $entranceTotal + $facilityTotal + $servicesTotal - $discountAmount;
-                $amountPaid = $this->input('payment.amount_paid', 0);
-                
-                // ✅ CRITICAL: Full payment required for walk-ins
-                $tolerance = 1.00;  // Allow ₱1 tolerance for rounding
-                if ($amountPaid < ($totalAmount - $tolerance)) {
-                    $validator->errors()->add(
-                        'payment.amount_paid', 
-                        sprintf(
-                            'Full payment of ₱%.2f is required for walk-in entries. You paid ₱%.2f (₱%.2f short).',
-                            $totalAmount,
-                            $amountPaid,
-                            $totalAmount - $amountPaid
-                        )
-                    );
-                }
-                
-                // ✅ Validate overpayment
-                if ($amountPaid > $totalAmount + 10000) {
-                    $validator->errors()->add(
-                        'payment.amount_paid',
-                        sprintf(
-                            'Payment amount (₱%.2f) is too high. Total is ₱%.2f.',
-                            $amountPaid,
-                            $totalAmount
-                        )
                     );
                 }
             }
+            
+            // =====================================
+            // CAPACITY WARNINGS (non-blocking)
+            // =====================================
+            $this->checkCapacityWarnings($validator);
+            
+            // =====================================
+            // PAYMENT VALIDATION (full payment required)
+            // =====================================
+            $this->validatePayment($validator);
         });
+    }
+
+    /**
+     * Check capacity warnings for facilities
+     */
+    private function checkCapacityWarnings($validator)
+    {
+        $warnings = [];
+        
+        if ($this->has('facilities')) {
+            foreach ($this->facilities as $facilityData) {
+                $facility = Facility::find($facilityData['facility_id']);
+                
+                if ($facility && $facility->max_capacity > 0) {
+                    if ($this->number_of_guests > $facility->max_capacity) {
+                        $warnings[] = sprintf(
+                            'Warning: Guest count (%d) exceeds maximum capacity (%d) for %s.',
+                            $this->number_of_guests,
+                            $facility->max_capacity,
+                            $facility->name
+                        );
+                    }
+                }
+            }
+        }
+        
+        // Store warnings in session
+        if (!empty($warnings)) {
+            session()->flash('capacity_warnings', $warnings);
+        }
+    }
+
+    /**
+     * Validate payment equals total amount (walk-ins pay full)
+     */
+    private function validatePayment($validator)
+    {
+        if (!$this->has('payment')) return;
+        
+        // Calculate entrance fee
+        $entranceTotal = 0;
+        if ($this->entrance_rate_id) {
+            $entranceRate = Rate::find($this->entrance_rate_id);
+            if ($entranceRate) {
+                // Base entrance for all guests
+                $baseEntrance = $entranceRate->base_price * $this->number_of_guests;
+                $entranceTotal = $baseEntrance;
+                
+                // Apply Direct discounts (per guest type)
+                if ($this->has('guest_details')) {
+                    $totalDirectDiscount = 0;
+                    
+                    foreach ($this->guest_details as $detail) {
+                        if (isset($detail['discount_id']) && $detail['discount_id']) {
+                            $discount = Discount::find($detail['discount_id']);
+                            if ($discount && $discount->category === 'Direct_Discount') {
+                                $guestCount = $detail['guest_count'];
+                                
+                                if ($discount->type === 'Percentage') {
+                                    $discountPerGuest = $entranceRate->base_price * ($discount->value / 100);
+                                } else {
+                                    $discountPerGuest = min($discount->value, $entranceRate->base_price);
+                                }
+                                
+                                $totalDirectDiscount += $discountPerGuest * $guestCount;
+                            }
+                        }
+                    }
+                    
+                    $entranceTotal -= $totalDirectDiscount;
+                }
+                
+                // Apply Seasonal discount (to total entrance)
+                if ($this->seasonal_discount_id) {
+                    $seasonalDiscount = Discount::find($this->seasonal_discount_id);
+                    if ($seasonalDiscount && $seasonalDiscount->is_active) {
+                        if ($seasonalDiscount->type === 'Percentage') {
+                            $entranceTotal *= (1 - $seasonalDiscount->value / 100);
+                        } else {
+                            $entranceTotal -= min($seasonalDiscount->value, $entranceTotal);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Calculate facility fees
+        $facilityTotal = 0;
+        if ($this->has('facilities')) {
+            foreach ($this->facilities as $facilityData) {
+                $rate = Rate::find($facilityData['rate_id']);
+                if ($rate) {
+                    $facilityTotal += $rate->base_price * $facilityData['quantity'];
+                }
+            }
+        }
+        
+        // Calculate total
+        $subtotal = max(0, $entranceTotal + $facilityTotal);
+        
+        // Apply manual discount if present
+        if ($this->manual_discount_amount) {
+            $subtotal -= $this->manual_discount_amount;
+        }
+        
+        $totalAmount = max(0, $subtotal);
+        $amountPaid = $this->input('payment.amount_paid', 0);
+        
+        // Walk-ins must pay full amount
+        if ($amountPaid < $totalAmount) {
+            $validator->errors()->add('payment.amount_paid',
+                sprintf(
+                    'Walk-in guests must pay the full amount of ₱%.2f. Amount paid: ₱%.2f',
+                    $totalAmount,
+                    $amountPaid
+                )
+            );
+        }
+        
+        // Warn if significant overpayment
+        if ($amountPaid > $totalAmount * 1.5) {
+            $validator->errors()->add('payment.amount_paid',
+                sprintf(
+                    'Payment amount (₱%.2f) significantly exceeds total (₱%.2f). Please verify.',
+                    $amountPaid,
+                    $totalAmount
+                )
+            );
+        }
     }
 
     public function messages()
     {
         return [
+            'entrance_rate_id.required' => 'Please select an entrance rate (Day, Night, or Day & Night).',
+            'entrance_rate_id.exists' => 'Selected entrance rate does not exist.',
+            
             'guest_name.required' => 'Guest name is required.',
             'guest_name.min' => 'Guest name must be at least 2 characters.',
             
@@ -326,8 +436,8 @@ class StoreGuestEntryRequest extends FormRequest
             'entry_date.required' => 'Entry date is required.',
             'entry_date.before_or_equal' => 'Entry date cannot be in the future.',
             
-            'total_guest.required' => 'Number of guests is required.',
-            'total_guest.min' => 'At least 1 guest is required.',
+            'number_of_guests.required' => 'Number of guests is required.',
+            'number_of_guests.min' => 'At least 1 guest is required.',
             
             'guest_details.required' => 'Guest details are required.',
             'guest_details.min' => 'At least one guest detail entry is required.',
@@ -345,36 +455,7 @@ class StoreGuestEntryRequest extends FormRequest
             'payment.required' => 'Payment information is required.',
             'payment.payment_method.required' => 'Payment method is required.',
             'payment.amount_paid.required' => 'Payment amount is required.',
+            'payment.amount_paid.min' => 'Payment amount must be greater than zero.',
         ];
-    }
-    
-    /**
-     * ✅ Sanitize input data
-     */
-    protected function prepareForValidation()
-    {
-        $data = [];
-        
-        if ($this->has('guest_name')) {
-            $data['guest_name'] = trim(strip_tags($this->guest_name));
-        }
-        
-        if ($this->has('contact_number')) {
-            $data['contact_number'] = preg_replace('/[^0-9]/', '', $this->contact_number);
-        }
-        
-        // ✅ Sanitize service names
-        if ($this->has('third_party_services')) {
-            $services = [];
-            foreach ($this->third_party_services as $service) {
-                $services[] = [
-                    'service_name' => trim(strip_tags($service['service_name'] ?? '')),
-                    'amount' => $service['amount'] ?? 0,
-                ];
-            }
-            $data['third_party_services'] = $services;
-        }
-        
-        $this->merge($data);
     }
 }

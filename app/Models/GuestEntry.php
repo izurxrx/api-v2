@@ -71,7 +71,7 @@ class GuestEntry extends Model
     // RELATIONSHIPS
     // ========================================
     
-    public function details()
+    public function guestdetails()
     {
         return $this->hasMany(GuestEntryDetail::class);
     }
@@ -84,6 +84,10 @@ class GuestEntry extends Model
     public function createdBy()
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+    public function entranceRate()
+    {
+        return $this->belongsTo(Rate::class, 'entrance_rate_id');
     }
 
     public function discount()
@@ -172,10 +176,18 @@ class GuestEntry extends Model
         return $query->where('booking_type', 'booking');
     }
 
-    public function scopeAvailableForWalkIn($query)
+    // public function scopeAvailableForWalkIn($query)
+    // {
+    //     return $query->where('booking_type', 'walk_in')
+    //                  ->where('is_available_for_booking', true)
+    //                  ->where('is_maintenance', false);
+    // }
+
+    public static function generateEntryReference()
     {
-        return $query->where('booking_type', 'walk_in')
-                     ->where('is_available_for_booking', true)
-                     ->where('is_maintenance', false);
+        $prefix = 'SWIM';
+        $datePart = now()->format('Ymd');
+        $randomPart = strtoupper(substr(bin2hex(random_bytes(3)), 0, 6));
+        return "{$prefix}-{$datePart}-{$randomPart}";
     }
 }

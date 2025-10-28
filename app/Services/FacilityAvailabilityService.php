@@ -36,9 +36,14 @@ class FacilityAvailabilityService
             return 0;
         }
 
-        // Check if facility is available for booking
-        if (!$facility->is_available_for_booking) {
-            Log::info("⚠️ Facility {$facilityId} is not available for booking");
+        if ($facility->trashed()) {
+            Log::info("⚠️ Facility {$facilityId} is deleted/inactive");
+            return 0;
+        }
+
+        // Check if facility has any units
+        if ($facility->quantity <= 0) {
+            Log::info("⚠️ Facility {$facilityId} has no units available");
             return 0;
         }
 
@@ -49,7 +54,7 @@ class FacilityAvailabilityService
         if ($end->lte($start)) {
             Log::warning("❌ Invalid time range: end time must be after start time");
             return 0;
-        }
+        } 
 
         $totalQuantity = $facility->quantity;
 
@@ -154,8 +159,8 @@ class FacilityAvailabilityService
         $endDateTime, 
         $facilityTypeId = null
     ): array {
-        $query = Facility::where('is_available_for_booking', true)
-            ->where('quantity', '>', 0);
+        $query = Facility::whereNull('deleted_at')  // Not soft-deleted
+           ->where('quantity', '>', 0);
 
         if ($facilityTypeId) {
             $query->where('facility_type_id', $facilityTypeId);

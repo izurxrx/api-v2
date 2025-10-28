@@ -79,21 +79,30 @@ class UpdateBookingRequest extends FormRequest
                         continue;
                     }
 
-                    // ✅ Check facility status
-                    if ($facility->status !== 'Available') {
+                    // ✅ Check if facility is active (not soft-deleted)
+                    if ($facility->trashed()) {
                         $validator->errors()->add(
                             "facilities.{$index}.facility_id",
-                            "Facility '{$facility->name}' is currently {$facility->status}."
+                            "Facility '{$facility->name}' is not available for booking."
                         );
                         continue;
                     }
 
-                    // ✅ Check guest count vs capacity
+                    // ✅ Check if facility has any units
+                    if ($facility->quantity <= 0) {
+                        $validator->errors()->add(
+                            "facilities.{$index}.facility_id",
+                            "Facility '{$facility->name}' has no available units."
+                        );
+                        continue;
+                    }
+
+                    // NEW (CORRECT):
                     $guestCount = $facilityData['guest_count'] ?? 0;
-                    if ($guestCount > $facility->capacity) {
+                    if ($guestCount > $facility->max_capacity) {  // ✅ Use max_capacity
                         $validator->errors()->add(
                             "facilities.{$index}.guest_count",
-                            "Guest count ({$guestCount}) exceeds facility capacity ({$facility->capacity}) per unit."
+                            "Guest count ({$guestCount}) exceeds facility maximum capacity ({$facility->max_capacity}) per unit."
                         );
                     }
 

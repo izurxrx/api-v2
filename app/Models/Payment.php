@@ -138,4 +138,12 @@ class Payment extends Model
         }
         return $query;
     }
+
+    public static function generatePaymentNumber()
+    {
+        $prefix = 'PAY';
+        $datePart = now()->format('Ymd');
+        $randomPart = strtoupper(substr(uniqid(), -5));
+        return "{$prefix}-{$datePart}-{$randomPart}";
+    }
 }
