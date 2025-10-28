@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\BillingController;
+use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\FacilityAvailabilityController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BookingController;
@@ -345,5 +346,14 @@ Route::middleware('auth:sanctum')->group(function () {
         
         Route::get('/revenue/export/pdf', [ReportController::class, 'exportRevenuePdf'])
             ->middleware('permission:export-reports');
+    });
+
+    Route::prefix('dashboard')->group(function () {
+        Route::get('/booked-today', [DashboardController::class, 'getBookedToday'])
+            ->middleware('permission:view-dashboard');
+        Route::get('/upcoming-bookings', [DashboardController::class, 'getUpcomingBookings'])
+            ->middleware('permission:view-dashboard');
+        Route::get('/total-guest-today', [DashboardController::class, 'totalGuestToday'])
+            ->middleware('permission:view-dashboard');
     });
 });
