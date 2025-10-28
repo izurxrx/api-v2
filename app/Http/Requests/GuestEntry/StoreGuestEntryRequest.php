@@ -320,17 +320,29 @@ class StoreGuestEntryRequest extends FormRequest
         return [
             'guest_name.required' => 'Guest name is required.',
             'guest_name.min' => 'Guest name must be at least 2 characters.',
-            'contact_number.required' => 'Contact number is required.',
+            
             'contact_number.regex' => 'Contact number must be a valid Philippine mobile number (09XXXXXXXXX).',
-            'entry_date.before_or_equal' => 'Entry date cannot be in the future. Use booking for future dates.',
-            'entry_date.after' => 'Cannot create entries older than 7 days.',
-            'total_guests.required' => 'Total guests is required.',
-            'total_guests.min' => 'At least 1 guest is required.',
-            'details.required' => 'At least one guest type must be added.',
-            'facilities.required' => 'At least one facility must be selected.',
-            'facilities.*.facility_id.required' => 'Facility is required.',
-            'facilities.*.quantity.required' => 'Quantity is required.',
-            'facilities.*.quantity.min' => 'Quantity must be at least 1.',
+            
+            'entry_date.required' => 'Entry date is required.',
+            'entry_date.before_or_equal' => 'Entry date cannot be in the future.',
+            
+            'total_guest.required' => 'Number of guests is required.',
+            'total_guest.min' => 'At least 1 guest is required.',
+            
+            'guest_details.required' => 'Guest details are required.',
+            'guest_details.min' => 'At least one guest detail entry is required.',
+            
+            'guest_details.*.guest_type_name.required' => 'Guest type is required.',
+            'guest_details.*.guest_type_name.in' => 'Guest type must be Adult, Senior Citizen, PWD, or Child.',
+            'guest_details.*.guest_count.required' => 'Guest count is required.',
+            'guest_details.*.guest_count.min' => 'Guest count must be at least 1.',
+            
+            'facilities.*.facility_id.required_with' => 'Facility selection is required.',
+            'facilities.*.facility_id.exists' => 'Selected facility does not exist.',
+            'facilities.*.rate_id.required_with' => 'Rate is required for each facility.',
+            'facilities.*.quantity.required_with' => 'Quantity is required for each facility.',
+            
+            'payment.required' => 'Payment information is required.',
             'payment.payment_method.required' => 'Payment method is required.',
             'payment.amount_paid.required' => 'Payment amount is required.',
         ];
