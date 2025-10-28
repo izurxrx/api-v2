@@ -95,13 +95,13 @@ class StoreBookingRequest extends FormRequest
             'third_party_services.*.service_name' => 'required_with:third_party_services|string|max:255',
             'third_party_services.*.amount' => 'required_with:third_party_services|numeric|min:0|max:9999999.99',
             
-            // ✅ PAYMENT
-            'payment' => 'required|array',
-            'payment.payment_method' => 'required|in:cash,gcash,bank_transfer,credit_card,debit_card,other',
-            'payment.amount_paid' => 'required|numeric|min:0.01|max:9999999.99',
-            'payment.change_amount' => 'nullable|numeric|min:0|max:9999999.99',
-            'payment.reference_number' => 'nullable|string|max:255',
-            'payment.notes' => 'nullable|string|max:1000',
+            // ✅ PAYMENT REMOVED - Payments now handled in Billing module
+            // 'payment' => 'required|array',
+            // 'payment.payment_method' => 'required|in:cash,gcash,bank_transfer,credit_card,debit_card,other',
+            // 'payment.amount_paid' => 'required|numeric|min:0|max:9999999.99',
+            // 'payment.change_amount' => 'nullable|numeric|min:0|max:9999999.99',
+            // 'payment.reference_number' => 'nullable|string|max:255',
+            // 'payment.notes' => 'nullable|string|max:1000',
             
             // ✅ ADDITIONAL NOTES
             'special_requests' => 'nullable|string|max:1000',
@@ -211,9 +211,10 @@ class StoreBookingRequest extends FormRequest
             $this->checkCapacityWarnings($validator);
             
             // =====================================
-            // PAYMENT VALIDATION (50% DOWNPAYMENT)
+            // PAYMENT VALIDATION - REMOVED
             // =====================================
-            $this->validatePayment($validator);
+            // Payment validation removed - payments now handled in Billing module
+            // $this->validatePayment($validator);
         });
     }
 
@@ -515,13 +516,13 @@ class StoreBookingRequest extends FormRequest
         
         $amountPaid = $this->input('payment.amount_paid', 0);
         
-        // Check minimum downpayment
-        if ($amountPaid < $requiredDownpayment) {
+        // ✅ UPDATED: Allow zero payment (Pending booking) or require 50% downpayment (Confirmed booking)
+        // Skip validation if payment is zero (booking will be Pending)
+        if ($amountPaid > 0 && $amountPaid < $requiredDownpayment) {
             $validator->errors()->add('payment.amount_paid',
                 sprintf(
-                    'Minimum downpayment of ₱%.2f (50%% of ₱%.2f) is required. Amount paid: ₱%.2f',
+                    'Payment must be either ₱0 (Pending booking) or at least ₱%.2f (50%% downpayment for Confirmed booking). Amount paid: ₱%.2f',
                     $requiredDownpayment,
-                    $totalAmount,
                     $amountPaid
                 )
             );
@@ -576,10 +577,7 @@ class StoreBookingRequest extends FormRequest
             'discount_id.required_if' => 'Please select a discount for the chosen discount mode.',
             'manual_discount_amount.required_if' => 'Please enter the manual discount amount.',
             
-            'payment.required' => 'Payment information is required.',
-            'payment.payment_method.required' => 'Payment method is required.',
-            'payment.amount_paid.required' => 'Payment amount is required.',
-            'payment.amount_paid.min' => 'Payment amount must be greater than zero.',
+            // Payment messages removed - payments now handled in Billing module
         ];
     }
 }

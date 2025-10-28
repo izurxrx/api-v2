@@ -121,9 +121,11 @@ class BookingResource extends JsonResource
             'third_party_service_amount' => (float) $this->third_party_service_amount,
             'subtotal' => (float) $this->subtotal,
             'total_amount' => (float) $this->total_amount,
-            'payment_status' => $this->payment_status,
-            'amount_paid' => (float) $this->amount_paid,
-            'balance' => (float) $this->balance,
+            
+            // Payment fields (from billing relationship)
+            'payment_status' => $this->billing?->payment_status ?? 'unpaid',
+            'amount_paid' => (float) ($this->billing?->amount_paid ?? 0),
+            'balance' => (float) ($this->billing?->balance ?? $this->total_amount),
             
             // Calculated fields
             'minimum_deposit' => (float) ($this->total_amount * 0.5),
@@ -147,6 +149,23 @@ class BookingResource extends JsonResource
             // Payments
             'payments' => $this->whenLoaded('payments', function() use ($request) {
                 return PaymentResource::collection($this->payments)->toArray($request);
+            }),
+            
+            // Billing
+            'billing' => $this->whenLoaded('billing', function() {
+                return $this->billing ? [
+                    'id' => $this->billing->id,
+                    'billing_number' => $this->billing->billing_number,
+                    'total_amount' => (float) $this->billing->total_amount,
+                    'amount_paid' => (float) $this->billing->amount_paid,
+                    'balance' => (float) $this->billing->balance,
+                    'downpayment_amount' => (float) $this->billing->downpayment_amount,
+                    'downpayment_paid' => (float) $this->billing->downpayment_paid,
+                    'is_downpayment_paid' => (bool) $this->billing->is_downpayment_paid,
+                    'payment_status' => $this->billing->payment_status,
+                    'billing_status' => $this->billing->billing_status,
+                    'billed_at' => $this->billing->billed_at?->toIso8601String(),
+                ] : null;
             }),
             
             // Timestamps

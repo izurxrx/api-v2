@@ -13,6 +13,8 @@ class GuestEntry extends Model
     use HasFactory, SoftDeletes, LogsActivity;
 
     protected $fillable = [
+        'booking_id', // ✅ NEW: Link to booking
+        'entry_type', // ✅ NEW: 'walk_in' or 'booking'
         'entry_reference',
         'entry_date',
         'entry_time',
@@ -36,6 +38,8 @@ class GuestEntry extends Model
         'created_by',
         'exit_date',
         'exit_time',
+        'checked_out_by',
+        'checkout_notes',
     ];
 
     protected $casts = [
@@ -85,6 +89,12 @@ class GuestEntry extends Model
     {
         return $this->belongsTo(User::class, 'created_by');
     }
+
+    public function checkedOutBy()
+    {
+        return $this->belongsTo(User::class, 'checked_out_by');
+    }
+
     public function entranceRate()
     {
         return $this->belongsTo(Rate::class, 'entrance_rate_id');
@@ -106,6 +116,14 @@ class GuestEntry extends Model
     public function billing()
     {
         return $this->morphOne(Billing::class, 'billable');
+    }
+
+    /**
+     * ✅ NEW: Relationship to booking (for check-ins from bookings)
+     */
+    public function booking()
+    {
+        return $this->belongsTo(Booking::class, 'booking_id');
     }
 
     // ========================================

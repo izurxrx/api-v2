@@ -20,8 +20,6 @@ class UpdateBookingRequest extends FormRequest
             // Guest Information
             'guest_name' => 'required|string|max:255',
             'contact_number' => 'required|string|max:20',
-            'email' => 'nullable|email|max:255',
-            'address' => 'nullable|string',
             
             // Booking Dates & Times
             'check_in_date' => 'required|date',

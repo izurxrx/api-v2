@@ -18,7 +18,7 @@ class StoreFacilityRequest extends FormRequest
             'name' => 'required|string|max:100',
             'quantity' => 'required|integer|min:1',
             'expected_capacity' => 'required|integer|min:0',
-            'max_capacity' => 'required|integer|min:0',
+            'max_capacity' => 'required|integer|gte:expected_capacity',
             'description' => 'nullable|string',
             'requires_entrance' => 'boolean',
         ];

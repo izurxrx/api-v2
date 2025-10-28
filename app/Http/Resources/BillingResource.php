@@ -38,6 +38,11 @@ class BillingResource extends JsonResource
             'refund_amount' => number_format($this->refund_amount, 2),
             'refund_amount_raw' => (float) $this->refund_amount,
             
+            // Downpayment
+            'downpayment_amount' => (float) $this->downpayment_amount,
+            'downpayment_paid' => (float) $this->downpayment_paid,
+            'is_downpayment_paid' => (bool) $this->is_downpayment_paid,
+            
             // Status
             'payment_status' => $this->payment_status,
             'payment_status_label' => $this->getPaymentStatusLabel(),

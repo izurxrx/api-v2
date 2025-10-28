@@ -85,12 +85,9 @@ class StoreGuestEntryRequest extends FormRequest
             // ✅ MANUAL DISCOUNT (optional staff discount)
             'manual_discount_amount' => 'nullable|numeric|min:0|max:9999999.99',
             
-            // ✅ PAYMENT (required - full payment for walk-ins)
-            'payment' => 'required|array',
-            'payment.payment_method' => 'required|in:Cash,Gcash,Others',
-            'payment.amount_paid' => 'required|numeric|min:0.01|max:9999999.99',
-            'payment.change_amount' => 'nullable|numeric|min:0|max:9999999.99',
-            'payment.reference_number' => 'nullable|string|max:255',
+            // ❌ PAYMENT REMOVED - Now handled separately in Billing module
+            // Walk-in entries create billing record with unpaid status
+            // Payment is collected via Billing module after entry is created
             
             // ✅ NOTES
             'notes' => 'nullable|string|max:1000',
@@ -286,10 +283,10 @@ class StoreGuestEntryRequest extends FormRequest
             // =====================================
             $this->checkCapacityWarnings($validator);
             
-            // =====================================
-            // PAYMENT VALIDATION (full payment required)
-            // =====================================
-            $this->validatePayment($validator);
+            // ❌ PAYMENT VALIDATION REMOVED
+            // Payment is now handled separately in the Billing module
+            // Walk-in entries create billing with unpaid status
+            // $this->validatePayment($validator);
         });
     }
 
@@ -452,10 +449,7 @@ class StoreGuestEntryRequest extends FormRequest
             'facilities.*.rate_id.required_with' => 'Rate is required for each facility.',
             'facilities.*.quantity.required_with' => 'Quantity is required for each facility.',
             
-            'payment.required' => 'Payment information is required.',
-            'payment.payment_method.required' => 'Payment method is required.',
-            'payment.amount_paid.required' => 'Payment amount is required.',
-            'payment.amount_paid.min' => 'Payment amount must be greater than zero.',
+            // ❌ Payment validation messages removed - payment handled in Billing module
         ];
     }
 }

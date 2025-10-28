@@ -23,6 +23,7 @@ class BillingController extends Controller
 
     /**
      * Get paginated list of billings with filters
+     * ✅ UPDATED: Default to show only unpaid/partial (exclude fully paid)
      */
     public function index(Request $request)
     {
@@ -32,9 +33,17 @@ class BillingController extends Controller
             'createdBy',
         ]);
 
-        // Filter by payment status
-        if ($request->has('payment_status') && $request->payment_status !== 'all') {
-            $query->where('payment_status', $request->payment_status);
+        // ✅ UPDATED: Filter by payment status (default: exclude "paid")
+        // Fully paid billings should appear in Reports, not in Billings module
+        if ($request->has('payment_status')) {
+            if ($request->payment_status === 'all') {
+                // Show all including paid
+            } else {
+                $query->where('payment_status', $request->payment_status);
+            }
+        } else {
+            // ✅ DEFAULT: Only show unpaid and partial (exclude paid)
+            $query->whereIn('payment_status', ['unpaid', 'partial']);
         }
 
         // Filter by billing status

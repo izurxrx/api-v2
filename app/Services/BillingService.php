@@ -56,30 +56,37 @@ class BillingService
         if ($paymentData && isset($paymentData['amount_paid'])) {
             $amountPaid = $paymentData['amount_paid'];
             
-            // Determine if this is downpayment or full payment
-            if ($amountPaid >= $totalAmount) {
-                // Full payment
-                $this->recordPayment($billing, $paymentData, 'full');
-                
-                // Update booking to Confirmed
-                $booking->update(['booking_status' => 'Confirmed']);
-                
-            } elseif ($amountPaid >= $downpaymentRequired) {
-                // Downpayment
-                $this->recordPayment($billing, $paymentData, 'downpayment');
-                
-                // Update booking to Confirmed
-                $booking->update(['booking_status' => 'Confirmed']);
-                
-            } else {
-                throw new \Exception(
-                    sprintf(
-                        'Payment amount (₱%.2f) is less than required downpayment (₱%.2f)',
-                        $amountPaid,
-                        $downpaymentRequired
-                    )
-                );
+            // ✅ UPDATED: Allow zero payment (booking remains Pending)
+            if ($amountPaid > 0) {
+                // Determine if this is downpayment or full payment
+                if ($amountPaid >= $totalAmount) {
+                    // Full payment
+                    $this->recordPayment($billing, $paymentData, 'full');
+                    
+                    // Update booking to Confirmed
+                    $booking->update(['booking_status' => 'Confirmed']);
+                    
+                } elseif ($amountPaid >= $downpaymentRequired) {
+                    // Downpayment (50%+)
+                    $this->recordPayment($billing, $paymentData, 'downpayment');
+                    
+                    // Update booking to Confirmed
+                    $booking->update(['booking_status' => 'Confirmed']);
+                    
+                } else {
+                    // Partial payment (< 50%) - still Pending
+                    $this->recordPayment($billing, $paymentData, 'partial');
+                    
+                    // Booking remains Pending (no status update)
+                    Log::info('Booking created with insufficient payment', [
+                        'booking_id' => $booking->id,
+                        'amount_paid' => $amountPaid,
+                        'downpayment_required' => $downpaymentRequired,
+                        'status' => 'Pending'
+                    ]);
+                }
             }
+            // ✅ If $amountPaid === 0, no payment is recorded, booking stays Pending
         }
 
         return $billing->fresh();
@@ -197,18 +204,32 @@ class BillingService
             receivedBy: auth()->id()
         );
         
-        // Update downpayment status if this is a downpayment
-        if ($paymentType === 'downpayment') {
+        // ✅ FIXED: Always update downpayment progress (not just for explicit 'downpayment' type)
+        // This ensures partial payments count toward the downpayment threshold
+        if ($billing->downpayment_amount > 0 && !$billing->is_downpayment_paid) {
+            $newDownpaymentPaid = min(
+                $billing->downpayment_paid + $amountPaid,
+                $billing->downpayment_amount
+            );
+            
+            $isDownpaymentNowMet = $newDownpaymentPaid >= $billing->downpayment_amount;
+            
             $billing->update([
-                'downpayment_paid' => $billing->downpayment_paid + $amountPaid,
-                'is_downpayment_paid' => true,
+                'downpayment_paid' => $newDownpaymentPaid,
+                'is_downpayment_paid' => $isDownpaymentNowMet,
             ]);
             
-            Log::info('Downpayment recorded', [
-                'billing_id' => $billing->id,
-                'downpayment_amount' => $amountPaid,
-                'billing_type' => class_basename($billing->billable_type),
-            ]);
+            if ($isDownpaymentNowMet) {
+                Log::info('Downpayment threshold met', [
+                    'billing_id' => $billing->id,
+                    'downpayment_paid' => $newDownpaymentPaid,
+                    'downpayment_required' => $billing->downpayment_amount,
+                    'billing_type' => class_basename($billing->billable_type),
+                ]);
+                
+                // Update booking status now that downpayment is met
+                $billing->fresh()->updateBillableStatus();
+            }
         }
         
         return $payment->fresh();

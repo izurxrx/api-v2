@@ -126,8 +126,6 @@ class BookingController extends Controller
                     'entrance_rate_id' => $request->booking_type === 'Swimming' ? $request->entrance_rate_id : null,
                     'guest_name' => $request->guest_name,
                     'contact_number' => $request->contact_number,
-                    'email' => $request->email,
-                    'address' => $request->address,
                     'check_in_date' => $checkInDate,
                     'check_out_date' => $checkOutDate,
                     'check_in_datetime' => $checkInDateTime,
@@ -191,18 +189,11 @@ class BookingController extends Controller
                     }
                 }
                 
-                // ✅ STEP 11: Create billing and process payment
-                $paymentData = [
-                    'amount_paid' => $request->payment['amount_paid'],
-                    'payment_method' => $request->payment['payment_method'],
-                    'change_amount' => $request->payment['change_amount'] ?? 0,
-                    'reference_number' => $request->payment['reference_number'] ?? null,
-                    'notes' => $request->payment['notes'] ?? null,
-                ];
-                
+                // ✅ STEP 11: Create billing WITHOUT payment
+                // Payment is now handled separately in the Billing module
                 $billing = $this->billingService->createBillingForBooking(
                     $booking, 
-                    $paymentData,
+                    null, // No payment data
                     50 // 50% downpayment requirement
                 );
                 
@@ -215,7 +206,7 @@ class BookingController extends Controller
                     'booking_reference' => $booking->booking_reference,
                     'booking_type' => $booking->booking_type,
                     'total_amount' => $totalAmount,
-                    'payment_received' => $request->payment['amount_paid'],
+                    'billing_id' => $billing->id,
                     'created_by' => auth()->id(),
                 ]);
                 
@@ -241,7 +232,7 @@ class BookingController extends Controller
                 Log::error('Booking creation failed', [
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
-                    'request' => $request->except(['payment']),
+                    'request' => $request->all(),
                 ]);
                 
                 throw $e;
@@ -267,9 +258,30 @@ class BookingController extends Controller
             $query->where('booking_type', $request->booking_type);
         }
 
-        // Filter by status
-        if ($request->has('status') && $request->status !== 'all') {
-            $query->where('booking_status', $request->status);
+        // ✅ FIXED: Filter by booking status (support both 'status' and 'booking_status' params)
+        $bookingStatus = $request->input('booking_status') ?? $request->input('status');
+        if ($bookingStatus && $bookingStatus !== 'all') {
+            $query->where('booking_status', $bookingStatus);
+            
+            // ✅ NEW: Exclude already checked-in bookings from "Confirmed" list
+            // When filtering for "Confirmed" bookings, only show those that haven't been checked in yet
+            if ($bookingStatus === 'Confirmed') {
+                $query->doesntHave('guestEntry');
+            }
+        }
+
+        // ✅ NEW: Filter by payment status (from billing relationship)
+        if ($request->has('payment_status') && $request->payment_status !== 'all') {
+            $query->whereHas('billing', function($q) use ($request) {
+                $q->where('payment_status', $request->payment_status);
+            });
+        }
+
+        // ✅ NEW: Filter by facility
+        if ($request->has('facility_id') && $request->facility_id) {
+            $query->whereHas('facilities', function($q) use ($request) {
+                $q->where('facility_id', $request->facility_id);
+            });
         }
 
         // Filter by date range
@@ -398,6 +410,12 @@ class BookingController extends Controller
 
     /**
      * Check-in a booking
+     * 
+     * ⚠️ DEPRECATED: Use GuestMonitoringController::checkInBooking() instead
+     * This method is kept for backward compatibility but should not be used for new implementations.
+     * Check-ins should be done through the Guest Monitoring module to maintain a unified check-in/out workflow.
+     * 
+     * @deprecated Use POST /guest-monitoring/check-in-booking/{bookingId} instead
      */
     public function checkIn(Request $request, $id)
     {
@@ -447,6 +465,12 @@ class BookingController extends Controller
 
     /**
      * Check-out a booking
+     * 
+     * ⚠️ DEPRECATED: Use GuestMonitoringController::checkout() instead
+     * This method is kept for backward compatibility but should not be used for new implementations.
+     * Check-outs should be done through the Guest Monitoring module to maintain a unified check-in/out workflow.
+     * 
+     * @deprecated Use POST /guest-monitoring/{guestEntryId}/checkout instead
      */
     public function checkOut(Request $request, $id)
     {

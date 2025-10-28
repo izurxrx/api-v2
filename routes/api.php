@@ -72,7 +72,7 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     // ========================================
-    // GUEST MONITORING (Walk-ins)
+    // GUEST MONITORING (Walk-ins & Booking Check-ins)
     // ========================================
     Route::prefix('guest-monitoring')->group(function () {
         Route::get('/', [GuestMonitoringController::class, 'index'])
@@ -80,6 +80,10 @@ Route::middleware('auth:sanctum')->group(function () {
         
         Route::post('/', [GuestMonitoringController::class, 'store'])
             ->middleware('permission:process-walk-ins');
+
+        // ✅ NEW: Check in a booking
+        Route::post('/check-in-booking/{bookingId}', [GuestMonitoringController::class, 'checkInBooking'])
+            ->middleware('permission:check-in-guests');
 
         Route::get('/archived', [GuestMonitoringController::class, 'archived'])
             ->middleware('permission:view-audit-logs'); // Changed: Manager/Admin only
@@ -269,6 +273,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // Get unpaid billings
         Route::get('/unpaid', [BillingController::class, 'unpaid'])
             ->middleware('permission:view-billings'); // Changed
+        
+        // Get billing by booking or guest entry reference
+        Route::get('/by-reference', [BillingController::class, 'getByReference'])
+            ->middleware('permission:view-billings');
         
         // Get single billing with all details
         Route::get('/{id}', [BillingController::class, 'show'])

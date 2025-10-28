@@ -12,6 +12,9 @@ use App\Models\GuestEntryDetail;
 use App\Models\GuestEntryFacility;
 use App\Models\Rate;
 use App\Models\Discount;
+use App\Models\Booking;
+use App\Models\Billing;
+use App\Models\ThirdPartyService;
 use App\Services\BillingService;
 use App\Services\FacilityAvailabilityService;
 use Illuminate\Http\Request;
@@ -187,16 +190,23 @@ class GuestMonitoringController extends Controller
                     ]));
                 }
                 
-                // ✅ STEP 11: Create billing and process payment (full payment for walk-ins)
-                $paymentData = [
-                    'amount_paid' => $request->payment['amount_paid'],
-                    'payment_method' => $request->payment['payment_method'],
-                    'change_amount' => $request->payment['change_amount'] ?? 0,
-                    'reference_number' => $request->payment['reference_number'] ?? null,
-                    'notes' => 'Walk-in guest payment',
-                ];
-                
-                $billing = $this->billingService->createBillingForGuestEntry($guestEntry, $paymentData);
+                // ✅ STEP 11: Create billing WITHOUT payment
+                // Payment is now handled separately in the Billing module
+                $billing = Billing::create([
+                    'billable_type' => GuestEntry::class,
+                    'billable_id' => $guestEntry->id,
+                    'billing_number' => Billing::generateBillingNumber(),
+                    'subtotal' => $guestEntry->subtotal,
+                    'discount_amount' => $guestEntry->discount_amount ?? 0,
+                    'total_amount' => $totalAmount,
+                    'amount_paid' => 0,
+                    'balance' => $totalAmount,
+                    'payment_status' => 'unpaid',
+                    'billing_status' => 'active', // Walk-ins are active immediately
+                    'billed_at' => now(),
+                    'created_by' => auth()->id(),
+                    'notes' => 'Walk-in guest entry - payment to be collected',
+                ]);
                 
                 // ✅ STEP 12: Get capacity warnings
                 $warnings = session('capacity_warnings', []);
@@ -206,7 +216,7 @@ class GuestMonitoringController extends Controller
                     'guest_entry_id' => $guestEntry->id,
                     'entry_reference' => $guestEntry->entry_reference,
                     'total_amount' => $totalAmount,
-                    'payment_received' => $request->payment['amount_paid'],
+                    'billing_id' => $billing->id,
                     'created_by' => auth()->id(),
                 ]);
                 
@@ -230,7 +240,7 @@ class GuestMonitoringController extends Controller
                 Log::error('Guest entry creation failed', [
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
-                    'request' => $request->except(['payment']),
+                    'request' => $request->all(),
                 ]);
                 
                 throw $e;
@@ -352,10 +362,56 @@ class GuestMonitoringController extends Controller
                 ], 400);
             }
             
+            // ✅ CRITICAL: Validate payment is complete before checkout
+            if ($guestEntry->billing) {
+                $balance = $guestEntry->billing->balance;
+                
+                if ($balance > 0) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => sprintf(
+                            'Cannot checkout with outstanding balance. Please collect payment of ₱%.2f before checkout.',
+                            $balance
+                        ),
+                        'balance' => $balance,
+                        'billing_id' => $guestEntry->billing->id,
+                    ], 400);
+                }
+            }
+            
             // Prepare checkout datetime
             $exitDate = Carbon::parse($request->exit_date);
             $exitTime = $request->exit_time ?: Carbon::now()->format('H:i');
             $exitDateTime = Carbon::parse("{$exitDate->toDateString()} {$exitTime}");
+
+            // ✅ NEW: Validate checkout date
+            $checkInDate = Carbon::parse($guestEntry->check_in_datetime)->startOfDay();
+            $checkoutDate = $exitDate->copy()->startOfDay();
+            
+            // Cannot checkout before check-in date
+            if ($checkoutDate->lt($checkInDate)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => sprintf(
+                        'Cannot checkout before check-in date. Check-in: %s, Checkout: %s',
+                        $checkInDate->format('F d, Y'),
+                        $checkoutDate->format('F d, Y')
+                    ),
+                ], 400);
+            }
+
+            // Validate checkout datetime is not in the future (reasonable grace period of 1 hour)
+            $now = Carbon::now();
+            if ($exitDateTime->gt($now->copy()->addHour())) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => sprintf(
+                        'Cannot checkout with a future date/time. Selected: %s, Current: %s',
+                        $exitDateTime->format('F d, Y h:i A'),
+                        $now->format('F d, Y h:i A')
+                    ),
+                ], 400);
+            }
             
             // ✅ NO OVERSTAY CALCULATION FOR SWIMMING WALK-INS
             // Swimming has fixed check-out time based on entrance rate
@@ -371,8 +427,8 @@ class GuestMonitoringController extends Controller
                 'checkout_notes' => $request->notes,
             ]);
             
-            // Update billing status if fully paid
-            if ($guestEntry->billing && $guestEntry->billing->payment_status === 'paid') {
+            // Update billing status to completed (payment already verified above)
+            if ($guestEntry->billing) {
                 $guestEntry->billing->update([
                     'billing_status' => 'completed',
                 ]);
@@ -526,5 +582,254 @@ class GuestMonitoringController extends Controller
                 ],
             ],
         ]);
+    }
+
+    /**
+     * ✅ NEW: Check in a booking to create guest entry
+     * This links a confirmed booking to an active guest entry
+     */
+    public function checkInBooking(Request $request, $bookingId)
+    {
+        $request->validate([
+            'actual_guests' => 'nullable|integer|min:1',
+            'check_in_notes' => 'nullable|string|max:1000',
+        ]);
+
+        return DB::transaction(function () use ($request, $bookingId) {
+            try {
+                // ✅ STEP 1: Find and validate booking
+                $booking = Booking::with([
+                    'entranceRate',
+                    'facilities.facility',
+                    'facilities.rate',
+                    'guestDiscounts.discount',
+                    'thirdPartyServices',
+                    'billing.payments',
+                ])->findOrFail($bookingId);
+
+                // ✅ STEP 2: Validate booking can be checked in
+                if ($booking->booking_status !== 'Confirmed') {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Only confirmed bookings can be checked in. Current status: ' . $booking->booking_status,
+                    ], 400);
+                }
+
+                // Check if already checked in
+                if ($booking->guestEntry) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'This booking has already been checked in.',
+                        'guest_entry_id' => $booking->guestEntry->id,
+                    ], 400);
+                }
+
+                // ✅ NEW: Validate check-in date (cannot check in before booking date)
+                $bookingCheckInDate = Carbon::parse($booking->check_in_datetime)->startOfDay();
+                $today = Carbon::now()->startOfDay();
+                
+                if ($today->lt($bookingCheckInDate)) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => sprintf(
+                            'Cannot check in before booking date. Booking check-in date: %s. Today: %s',
+                            $bookingCheckInDate->format('F d, Y'),
+                            $today->format('F d, Y')
+                        ),
+                        'booking_check_in_date' => $bookingCheckInDate->toDateString(),
+                        'current_date' => $today->toDateString(),
+                    ], 400);
+                }
+
+                // ✅ FIXED: Check payment status with better error messages
+                if (!$booking->billing) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Billing record not found for this booking. Please contact administrator.',
+                    ], 400);
+                }
+
+                if (!$booking->billing->is_downpayment_paid) {
+                    $remainingDownpayment = $booking->billing->downpayment_amount - $booking->billing->downpayment_paid;
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => sprintf(
+                            'Downpayment must be paid before check-in. Required: ₱%.2f, Paid: ₱%.2f, Remaining: ₱%.2f',
+                            $booking->billing->downpayment_amount,
+                            $booking->billing->downpayment_paid,
+                            $remainingDownpayment
+                        ),
+                        'required_downpayment' => $booking->billing->downpayment_amount,
+                        'downpayment_paid' => $booking->billing->downpayment_paid,
+                        'remaining_downpayment' => $remainingDownpayment,
+                    ], 400);
+                }
+
+                // ✅ STEP 3: Create guest entry from booking
+                $actualGuests = $request->actual_guests ?? $booking->number_of_guests;
+                $checkInDateTime = now();
+
+                $guestEntry = GuestEntry::create([
+                    'booking_id' => $booking->id,
+                    'entry_type' => 'booking',
+                    'entry_reference' => $this->generateEntryReference(),
+                    'entry_date' => $checkInDateTime->toDateString(),
+                    'entry_time' => $checkInDateTime->format('H:i:s'),
+                    'check_in_datetime' => $checkInDateTime,
+                    'entrance_rate_id' => $booking->entrance_rate_id,
+                    'guest_name' => $booking->guest_name,
+                    'contact_number' => $booking->contact_number,
+                    'total_guests' => $actualGuests,
+                    'discount_mode' => $booking->discount_mode,
+                    'discount_id' => $booking->discount_id,
+                    'manual_discount_amount' => $booking->manual_discount_amount,
+                    'entrance_subtotal' => $booking->entrance_subtotal ?? 0,
+                    'facility_subtotal' => $booking->facility_subtotal,
+                    'third_party_service_amount' => $booking->third_party_service_amount,
+                    'subtotal' => $booking->subtotal,
+                    'discount_amount' => $booking->discount_amount,
+                    'total_amount' => $booking->total_amount,
+                    'is_checked_out' => false,
+                    'notes' => $request->check_in_notes ?? $booking->notes,
+                    'created_by' => auth()->id(),
+                ]);
+
+                // ✅ STEP 4: Copy guest details (for Swimming bookings with guest breakdown)
+                if ($booking->booking_type === 'Swimming' && $booking->guestDiscounts()->count() > 0) {
+                    foreach ($booking->guestDiscounts as $guestDiscount) {
+                        $rate = $booking->entranceRate;
+                        $baseAmount = $rate->base_price * $guestDiscount->guest_count;
+                        $discountAmount = 0;
+
+                        if ($guestDiscount->discount) {
+                            if ($guestDiscount->discount->type === 'Percentage') {
+                                $discountAmount = ($rate->base_price * ($guestDiscount->discount->value / 100)) * $guestDiscount->guest_count;
+                            } else {
+                                $discountAmount = min($guestDiscount->discount->value, $rate->base_price) * $guestDiscount->guest_count;
+                            }
+                        }
+
+                        GuestEntryDetail::create([
+                            'guest_entry_id' => $guestEntry->id,
+                            'guest_type_name' => ucfirst($guestDiscount->guest_type),
+                            'guest_count' => $guestDiscount->guest_count,
+                            'rate_id' => $rate->id,
+                            'base_rate' => $rate->base_price,
+                            'discount_id' => $guestDiscount->discount_id,
+                            'discount_amount' => $discountAmount,
+                            'final_rate' => $rate->base_price - ($discountAmount / $guestDiscount->guest_count),
+                            'total_amount' => $baseAmount - $discountAmount,
+                        ]);
+                    }
+                } else {
+                    // Create single detail entry for non-Swimming or bookings without guest breakdown
+                    if ($booking->entranceRate) {
+                        GuestEntryDetail::create([
+                            'guest_entry_id' => $guestEntry->id,
+                            'guest_type_name' => 'Regular',
+                            'guest_count' => $actualGuests,
+                            'rate_id' => $booking->entranceRate->id,
+                            'base_rate' => $booking->entranceRate->base_price,
+                            'discount_id' => null,
+                            'discount_amount' => 0,
+                            'final_rate' => $booking->entranceRate->base_price,
+                            'total_amount' => $booking->entranceRate->base_price * $actualGuests,
+                        ]);
+                    }
+                }
+
+                // ✅ STEP 5: Copy facilities
+                foreach ($booking->facilities as $bookingFacility) {
+                    // Calculate subtotal if it's null (for older bookings)
+                    $facilitySubtotal = $bookingFacility->subtotal;
+                    if ($facilitySubtotal === null) {
+                        $facilitySubtotal = ($bookingFacility->rate_amount ?? 0) * ($bookingFacility->quantity ?? 1);
+                    }
+                    
+                    GuestEntryFacility::create([
+                        'guest_entry_id' => $guestEntry->id,
+                        'facility_id' => $bookingFacility->facility_id,
+                        'rate_id' => $bookingFacility->rate_id,
+                        'quantity' => $bookingFacility->quantity,
+                        'rate_amount' => $bookingFacility->rate_amount,
+                        'subtotal' => $facilitySubtotal,
+                    ]);
+                }
+
+                // ✅ STEP 6: Copy third-party services
+                foreach ($booking->thirdPartyServices as $service) {
+                    ThirdPartyService::create([
+                        'guest_entry_id' => $guestEntry->id,
+                        'service_name' => $service->service_name,
+                        'amount' => $service->amount,
+                    ]);
+                }
+
+                // ✅ STEP 7: Update booking status to Checked_In
+                $booking->update([
+                    'booking_status' => 'Checked_In',
+                    'actual_check_in_datetime' => $checkInDateTime,
+                    'checked_in_by' => auth()->id(),
+                    'actual_guests' => $actualGuests,
+                ]);
+
+                // ✅ STEP 8: Log check-in
+                Log::info('Booking checked in via Guest Monitoring', [
+                    'booking_id' => $booking->id,
+                    'booking_reference' => $booking->booking_reference,
+                    'guest_entry_id' => $guestEntry->id,
+                    'entry_reference' => $guestEntry->entry_reference,
+                    'checked_in_by' => auth()->id(),
+                ]);
+
+                // Load relationships for response
+                $guestEntry->load([
+                    'booking',
+                    'entranceRate',
+                    'guestDetails',
+                    'facilities.facility',
+                    'billing.payments',
+                    'createdBy',
+                ]);
+
+                return response()->json([
+                    'status' => 'success',
+                    'message' => 'Booking checked in successfully',
+                    'data' => new GuestEntryResource($guestEntry),
+                    'booking' => [
+                        'id' => $booking->id,
+                        'reference' => $booking->booking_reference,
+                        'status' => $booking->booking_status,
+                    ],
+                ], 201);
+
+            } catch (\Exception $e) {
+                Log::error('Booking check-in failed', [
+                    'booking_id' => $bookingId,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Failed to check in booking: ' . $e->getMessage(),
+                ], 500);
+            }
+        });
+    }
+
+    /**
+     * Helper: Generate entry reference
+     */
+    private function generateEntryReference()
+    {
+        $date = now()->format('Ymd');
+        $lastEntry = GuestEntry::whereDate('created_at', today())
+            ->orderBy('id', 'desc')
+            ->first();
+
+        $sequence = $lastEntry ? (intval(substr($lastEntry->entry_reference, -4)) + 1) : 1;
+
+        return 'GE-' . $date . '-' . str_pad($sequence, 4, '0', STR_PAD_LEFT);
     }
 }

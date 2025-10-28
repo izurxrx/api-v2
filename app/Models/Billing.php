@@ -338,6 +338,9 @@ class Billing extends Model
             'paid_at' => $paymentStatus === self::PAYMENT_PAID ? now() : $this->paid_at,
         ]);
 
+        // Update related booking/guest entry status based on payment
+        $this->updateBillableStatus();
+
         Log::info('Payment recorded', [
             'payment_id' => $payment->id,
             'billing_id' => $this->id,
@@ -371,6 +374,53 @@ class Billing extends Model
             $this->payment_status = self::PAYMENT_UNPAID;
             $this->billing_status = self::STATUS_PENDING;
         }
+    }
+
+    /**
+     * Update the booking or guest entry status based on payment progress
+     */
+    public function updateBillableStatus(): void
+    {
+        $billable = $this->billable;
+        
+        if (!$billable) {
+            return;
+        }
+
+        // For Bookings
+        if ($billable instanceof Booking) {
+            $currentStatus = $billable->booking_status;
+            
+            // Only update if booking is currently in Pending or Confirmed status
+            if (in_array($currentStatus, ['Pending', 'Confirmed'])) {
+                // If fully paid, set to Confirmed
+                if ($this->payment_status === self::PAYMENT_PAID || $this->balance <= 0) {
+                    $billable->booking_status = 'Confirmed';
+                    $billable->save();
+                    
+                    Log::info('Booking status updated to Confirmed (fully paid)', [
+                        'booking_id' => $billable->id,
+                        'billing_id' => $this->id,
+                        'amount_paid' => $this->amount_paid,
+                    ]);
+                }
+                // If partially paid and meets downpayment requirement, set to Confirmed
+                elseif ($this->hasMetDownpaymentRequirement() && $currentStatus === 'Pending') {
+                    $billable->booking_status = 'Confirmed';
+                    $billable->save();
+                    
+                    Log::info('Booking status updated to Confirmed (downpayment met)', [
+                        'booking_id' => $billable->id,
+                        'billing_id' => $this->id,
+                        'downpayment_paid' => $this->downpayment_paid,
+                        'downpayment_required' => $this->downpayment_amount,
+                    ]);
+                }
+            }
+        }
+        
+        // For Guest Entries - billing status changes are sufficient
+        // Guest entries are created as "Active" and don't need status updates based on payment
     }
 
     /**

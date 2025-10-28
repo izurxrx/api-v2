@@ -35,10 +35,7 @@ class GuestEntryResource extends JsonResource
             'subtotal' => (float) $this->subtotal,
             'discount_amount' => (float) $this->discount_amount,
             'total_amount' => (float) $this->total_amount,
-            'payment_status' => $this->payment_status,
-            'payment_method' => $this->payment_method,
-            'amount_paid' => (float) $this->amount_paid,
-            'balance' => (float) $this->balance,
+            // ✅ Payment info now comes from billing relationship only
             'is_checked_out' => (bool) $this->is_checked_out,
             'checkout_datetime' => $this->checkout_datetime?->toIso8601String(),  // ✅ ADD THIS
             'notes' => $this->notes,
@@ -59,8 +56,21 @@ class GuestEntryResource extends JsonResource
             'facilities' => $this->whenLoaded('facilities', function() use ($request) {
                 return GuestEntryFacilityResource::collection($this->facilities)->toArray($request);
             }),
-            'payments' => $this->whenLoaded('payments', function() use ($request) {
-                return PaymentResource::collection($this->payments)->toArray($request);
+            // ✅ REMOVED: payments relationship - payments are now accessed through billing
+            'billing' => $this->whenLoaded('billing', function() use ($request) {
+                return $this->billing ? [
+                    'id' => $this->billing->id,
+                    'billing_number' => $this->billing->billing_number,
+                    'total_amount' => (float) $this->billing->total_amount,
+                    'amount_paid' => (float) $this->billing->amount_paid,
+                    'balance' => (float) $this->billing->balance,
+                    'payment_status' => $this->billing->payment_status,
+                    'billing_status' => $this->billing->billing_status,
+                    'billed_at' => $this->billing->billed_at?->toIso8601String(),
+                    // ✅ Include payments from billing relationship
+                    'payments' => $this->billing->payments ? 
+                        PaymentResource::collection($this->billing->payments)->toArray($request) : [],
+                ] : null;
             }),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->diffForHumans(),

@@ -12,13 +12,15 @@ return new class extends Migration
      */
     public function up(): void
     {
-        // Add discount_mode to guest_entries
-        Schema::table('guest_entries', function (Blueprint $table) {
-            $table->enum('discount_mode', ['None', 'Seasonal', 'Direct', 'Manual'])
-                ->default('None')
-                ->after('entry_time')
-                ->comment('Discount mode applied to entire entry. Direct/Seasonal: select from discounts table per group. Manual: enter amount per group.');
-        });
+        // Add discount_mode to guest_entries (only if it doesn't exist)
+        if (!Schema::hasColumn('guest_entries', 'discount_mode')) {
+            Schema::table('guest_entries', function (Blueprint $table) {
+                $table->enum('discount_mode', ['None', 'Seasonal', 'Direct', 'Manual'])
+                    ->default('None')
+                    ->after('entry_time')
+                    ->comment('Discount mode applied to entire entry. Direct/Seasonal: select from discounts table per group. Manual: enter amount per group.');
+            });
+        }
 
         // Migrate existing data (if any exists)
         // Take the discount_mode from the first detail row

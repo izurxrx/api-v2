@@ -127,6 +127,14 @@ class Booking extends Model
         return $this->morphOne(Billing::class, 'billable');
     }
 
+    /**
+     * ✅ NEW: Relationship to guest entry (when booking is checked in)
+     */
+    public function guestEntry()
+    {
+        return $this->hasOne(GuestEntry::class, 'booking_id');
+    }
+
     // ========================================
     // HELPER METHODS
     // ========================================
@@ -226,8 +234,17 @@ class Booking extends Model
     /**
      * 🔧 ADD: Discount relationship
      */
-    public function discount()
+    public function guestDiscounts()
     {
         return $this->belongsTo(Discount::class, 'discount_id');
+    }
+
+    public static function generateBookingReference(): string
+    {
+        $prefix = 'BOOK';
+        $datePart = now()->format('Ymd');
+        $randomPart = strtoupper(substr(bin2hex(random_bytes(3)), 0, 6));
+        
+        return "{$prefix}-{$datePart}-{$randomPart}";
     }
 }

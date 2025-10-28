@@ -19,99 +19,121 @@ return new class extends Migration
         // ====================================================================
         
         // Handle existing 'Direct' mode entries at guest_entries level
-        // Convert them to 'None' if no details have Direct mode
-        DB::statement("
-            UPDATE guest_entries ge
-            SET discount_mode = 'None',
-                discount_amount = 0
-            WHERE discount_mode = 'Direct'
-            AND NOT EXISTS (
-                SELECT 1 FROM guest_entry_details ged 
-                WHERE ged.guest_entry_id = ge.id 
-                AND ged.discount_mode = 'Direct'
-            )
-        ");
+        // Convert them to 'None' if they exist
+        if (Schema::hasColumn('guest_entries', 'discount_mode')) {
+            DB::statement("
+                UPDATE guest_entries ge
+                SET discount_mode = 'None',
+                    discount_amount = 0
+                WHERE discount_mode = 'Direct'
+            ");
+        }
 
         // Migrate manual_discount_amount from details to entry level if needed
-        DB::statement("
-            UPDATE guest_entries ge
-            SET discount_amount = (
-                SELECT COALESCE(SUM(ged.manual_discount_amount), 0)
-                FROM guest_entry_details ged
-                WHERE ged.guest_entry_id = ge.id
-                AND ged.manual_discount_amount > 0
-            )
-            WHERE discount_mode = 'Manual'
-            AND discount_amount = 0
-        ");
+        if (Schema::hasColumn('guest_entry_details', 'manual_discount_amount')) {
+            DB::statement("
+                UPDATE guest_entries ge
+                SET discount_amount = (
+                    SELECT COALESCE(SUM(ged.manual_discount_amount), 0)
+                    FROM guest_entry_details ged
+                    WHERE ged.guest_entry_id = ge.id
+                    AND ged.manual_discount_amount > 0
+                )
+                WHERE discount_mode = 'Manual'
+                AND discount_amount = 0
+            ");
+        }
 
         // ====================================================================
         // STEP 2: SCHEMA CHANGES - guest_entries table
         // ====================================================================
         
         Schema::table('guest_entries', function (Blueprint $table) {
-            // Add discount_id for Seasonal mode
-            $table->unsignedBigInteger('discount_id')->nullable()->after('discount_mode');
-            $table->index('discount_id', 'idx_discount_id');
-            
-            // Add foreign key
-            $table->foreign('discount_id', 'guest_entries_discount_id_foreign')
-                  ->references('id')
-                  ->on('discounts')
-                  ->onDelete('set null');
-            
-            // Add index for discount_mode
-            $table->index('discount_mode', 'idx_discount_mode_entries');
+            // Add discount_id for Seasonal mode (only if doesn't exist)
+            if (!Schema::hasColumn('guest_entries', 'discount_id')) {
+                $table->unsignedBigInteger('discount_id')->nullable()->after('discount_mode');
+                $table->index('discount_id', 'idx_discount_id');
+                
+                // Add foreign key
+                $table->foreign('discount_id', 'guest_entries_discount_id_foreign')
+                      ->references('id')
+                      ->on('discounts')
+                      ->onDelete('set null');
+            }
         });
+        
+        // Add discount_mode index if doesn't exist
+        if (!DB::selectOne("SHOW INDEXES FROM guest_entries WHERE Key_name = 'idx_discount_mode_entries'")) {
+            Schema::table('guest_entries', function (Blueprint $table) {
+                $table->index('discount_mode', 'idx_discount_mode_entries');
+            });
+        }
 
-        // Update discount_mode enum - Remove 'Direct' from guest_entries
-        DB::statement("
-            ALTER TABLE guest_entries 
-            MODIFY COLUMN discount_mode 
-            ENUM('None','Seasonal','Manual') NOT NULL DEFAULT 'None'
-            COMMENT 'Entry-level discount mode. Seasonal: auto-applied discount from discounts table. Manual: staff enters discount amount. None: no entry-level discount (may have Direct per-group discounts).'
-        ");
+        // Update discount_mode enum - Remove 'Direct' from guest_entries (if column exists)
+        if (Schema::hasColumn('guest_entries', 'discount_mode')) {
+            DB::statement("
+                ALTER TABLE guest_entries 
+                MODIFY COLUMN discount_mode 
+                ENUM('None','Seasonal','Manual') NOT NULL DEFAULT 'None'
+                COMMENT 'Entry-level discount mode. Seasonal: auto-applied discount from discounts table. Manual: staff enters discount amount. None: no entry-level discount (may have Direct per-group discounts).'
+            ");
+        }
 
-        // Update discount_amount comment
-        DB::statement("
-            ALTER TABLE guest_entries
-            MODIFY COLUMN discount_amount DECIMAL(10,2) DEFAULT 0.00
-            COMMENT 'Discount amount: calculated from discount_id (Seasonal), staff-entered (Manual), or sum of detail-level Direct discounts'
-        ");
+        // Update discount_amount comment (if column exists)
+        if (Schema::hasColumn('guest_entries', 'discount_amount')) {
+            DB::statement("
+                ALTER TABLE guest_entries
+                MODIFY COLUMN discount_amount DECIMAL(10,2) DEFAULT 0.00
+                COMMENT 'Discount amount: calculated from discount_id (Seasonal), staff-entered (Manual), or sum of detail-level Direct discounts'
+            ");
+        }
 
         // ====================================================================
         // STEP 3: SCHEMA CHANGES - guest_entry_details table
         // ====================================================================
 
-        // Update discount_mode enum - Remove 'Seasonal' and 'Manual'
-        DB::statement("
-            ALTER TABLE guest_entry_details
-            MODIFY COLUMN discount_mode 
-            ENUM('None','Direct') NOT NULL DEFAULT 'None'
-            COMMENT 'Detail-level discount mode. None: no discount for this group (may inherit entry-level discount). Direct: specific direct discount from discounts table.'
-        ");
+        // Update discount_mode enum - Remove 'Seasonal' and 'Manual' (if column exists)
+        if (Schema::hasColumn('guest_entry_details', 'discount_mode')) {
+            DB::statement("
+                ALTER TABLE guest_entry_details
+                MODIFY COLUMN discount_mode 
+                ENUM('None','Direct') NOT NULL DEFAULT 'None'
+                COMMENT 'Detail-level discount mode. None: no discount for this group (may inherit entry-level discount). Direct: specific direct discount from discounts table.'
+            ");
+        }
 
-        // Remove manual_discount_amount column
-        Schema::table('guest_entry_details', function (Blueprint $table) {
-            $table->dropColumn('manual_discount_amount');
-            
-            // Add index for discount_mode
-            $table->index('discount_mode', 'idx_discount_mode_details');
-        });
+        // Remove manual_discount_amount column (if exists)
+        if (Schema::hasColumn('guest_entry_details', 'manual_discount_amount')) {
+            Schema::table('guest_entry_details', function (Blueprint $table) {
+                $table->dropColumn('manual_discount_amount');
+            });
+        }
+        
+        // Add discount_mode index if column and index don't exist
+        if (Schema::hasColumn('guest_entry_details', 'discount_mode') &&
+            !DB::selectOne("SHOW INDEXES FROM guest_entry_details WHERE Key_name = 'idx_discount_mode_details'")) {
+            Schema::table('guest_entry_details', function (Blueprint $table) {
+                $table->index('discount_mode', 'idx_discount_mode_details');
+            });
+        }
 
-        // Update discount_amount comment
-        DB::statement("
-            ALTER TABLE guest_entry_details
-            MODIFY COLUMN discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00
-            COMMENT 'Calculated discount for this guest group (only when discount_mode=Direct, otherwise 0)'
-        ");
+        // Update discount_amount comment (if column exists)
+        if (Schema::hasColumn('guest_entry_details', 'discount_amount')) {
+            DB::statement("
+                ALTER TABLE guest_entry_details
+                MODIFY COLUMN discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00
+                COMMENT 'Calculated discount for this guest group (only when discount_mode=Direct, otherwise 0)'
+            ");
+        }
 
-        // Update discount_id comment
-        DB::statement("
-            ALTER TABLE guest_entry_details
-            MODIFY COLUMN discount_id BIGINT(20) UNSIGNED DEFAULT NULL 
-            COMMENT 'FK to discounts table with category=Direct_Discount (only used when discount_mode=Direct)'
-        ");
+        // Update discount_id comment (if column exists)
+        if (Schema::hasColumn('guest_entry_details', 'discount_id')) {
+            DB::statement("
+                ALTER TABLE guest_entry_details
+                MODIFY COLUMN discount_id BIGINT(20) UNSIGNED DEFAULT NULL 
+                COMMENT 'FK to discounts table with category=Direct_Discount (only used when discount_mode=Direct)'
+            ");
+        }
 
         // ====================================================================
         // STEP 4: UPDATE VIEWS
@@ -120,40 +142,42 @@ return new class extends Migration
         // Drop existing view
         DB::statement('DROP VIEW IF EXISTS guest_entry_summary');
 
-        // Recreate view with new structure
-        DB::statement("
-            CREATE VIEW guest_entry_summary AS
-            SELECT 
-                ge.id AS entry_id,
-                ge.entry_reference,
-                ge.entry_date,
-                ge.guest_name,
-                ge.discount_mode AS entry_discount_mode,
-                ge.discount_id AS entry_discount_id,
-                ed.name AS entry_discount_name,
-                ed.category AS entry_discount_category,
-                ge.discount_amount AS entry_discount_amount,
-                ged.id AS detail_id,
-                ged.guest_type_name,
-                r.rate_name,
-                r.rate_category,
-                ged.guest_count,
-                ged.base_rate,
-                ged.discount_mode AS detail_discount_mode,
-                ged.discount_id AS detail_discount_id,
-                d.name AS detail_discount_name,
-                d.category AS detail_discount_category,
-                ged.discount_amount AS detail_discount_amount,
-                ged.final_rate,
-                ged.total_amount
-            FROM guest_entries ge
-            JOIN guest_entry_details ged ON ge.id = ged.guest_entry_id
-            JOIN rates r ON ged.rate_id = r.id
-            LEFT JOIN discounts d ON ged.discount_id = d.id
-            LEFT JOIN discounts ed ON ge.discount_id = ed.id
-            WHERE ge.deleted_at IS NULL 
-              AND ged.deleted_at IS NULL
-        ");
+        // Recreate view with new structure (only if columns exist)
+        if (Schema::hasColumn('guest_entry_details', 'discount_mode')) {
+            DB::statement("
+                CREATE VIEW guest_entry_summary AS
+                SELECT 
+                    ge.id AS entry_id,
+                    ge.entry_reference,
+                    ge.entry_date,
+                    ge.guest_name,
+                    ge.discount_mode AS entry_discount_mode,
+                    ge.discount_id AS entry_discount_id,
+                    ed.name AS entry_discount_name,
+                    ed.category AS entry_discount_category,
+                    ge.discount_amount AS entry_discount_amount,
+                    ged.id AS detail_id,
+                    ged.guest_type_name,
+                    r.rate_name,
+                    r.rate_category,
+                    ged.guest_count,
+                    ged.base_rate,
+                    ged.discount_mode AS detail_discount_mode,
+                    ged.discount_id AS detail_discount_id,
+                    d.name AS detail_discount_name,
+                    d.category AS detail_discount_category,
+                    ged.discount_amount AS detail_discount_amount,
+                    ged.final_rate,
+                    ged.total_amount
+                FROM guest_entries ge
+                JOIN guest_entry_details ged ON ge.id = ged.guest_entry_id
+                JOIN rates r ON ged.rate_id = r.id
+                LEFT JOIN discounts d ON ged.discount_id = d.id
+                LEFT JOIN discounts ed ON ge.discount_id = ed.id
+                WHERE ge.deleted_at IS NULL 
+                  AND ged.deleted_at IS NULL
+            ");
+        }
     }
 
     /**

@@ -18,7 +18,7 @@ class UpdateFacilityRequest extends FormRequest
             'name' => 'sometimes|string|max:100',
             'quantity' => 'sometimes|integer|min:1',
             'expected_capacity' => 'sometimes|integer|min:0',
-            'max_capacity' => 'sometimes|integer|min:0',
+            'max_capacity' => 'sometimes|integer|gte:expected_capacity',
             'description' => 'nullable|string',
             'requires_entrance' => 'boolean',
             'is_maintenance' => 'boolean',

@@ -39,7 +39,7 @@ class User extends Authenticatable
             ->logOnly(['username', 'full_name', 'contact_no'])
             ->logOnlyDirty()
             ->dontSubmitEmptyLogs();
-    }
+    } 
 
     // Relationships
     public function createdBookings()
