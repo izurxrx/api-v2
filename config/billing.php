@@ -205,4 +205,49 @@ return [
         
     ],
     
+    /*
+    |--------------------------------------------------------------------------
+    | Overtime Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Settings for automatic overtime charge calculation
+    |
+    */
+    
+    'overtime' => [
+        
+        /**
+         * Grace period before overtime kicks in (minutes)
+         * Default: 15 minutes
+         */
+        'grace_period_minutes' => env('OVERTIME_GRACE_PERIOD', 15),
+        
+        /**
+         * Allow discounts to be applied to overtime charges
+         * Default: false (standard industry practice)
+         */
+        'eligible_for_discounts' => env('OVERTIME_ELIGIBLE_FOR_DISCOUNTS', false),
+        
+        /**
+         * Overtime calculation method
+         * Options: 'hourly', 'per_minute', 'per_hour_started'
+         * Default: 'hourly' (round up to nearest hour)
+         */
+        'calculation_method' => env('OVERTIME_CALCULATION_METHOD', 'hourly'),
+        
+        /**
+         * Enable overtime calculation feature
+         * When true, overtime can be calculated via preview endpoint
+         * Staff must explicitly apply overtime during checkout by passing apply_overtime=true
+         * Default: true
+         */
+        'auto_calculate' => env('OVERTIME_AUTO_CALCULATE', true),
+        
+        /**
+         * Extension types that should auto-calculate overtime
+         */
+        'auto_calculate_types' => ['facility'],
+        
+    ],
+    
 ];

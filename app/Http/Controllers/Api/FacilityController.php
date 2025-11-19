@@ -11,6 +11,27 @@ use Illuminate\Http\Request;
 
 class FacilityController extends Controller
 {
+    public function showWalkInFacilities()
+    {
+        $facilities = Facility::with('facilityType')
+            ->whereRequiresEntrance(true)
+            ->get();
+
+        return response()->json([
+            'data' => FacilityResource::collection($facilities),
+        ]);
+    }
+
+    public function showBookingFacilities()
+    {
+        $facilities = Facility::with('facilityType')
+            ->whereRequiresEntrance(false)
+            ->get();
+
+        return response()->json([
+            'data' => FacilityResource::collection($facilities),
+        ]);
+    }
     public function index(Request $request)
     {
         $query = Facility::with('facilityType');

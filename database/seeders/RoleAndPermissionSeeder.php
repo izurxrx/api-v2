@@ -72,6 +72,9 @@ class RoleAndPermissionSeeder extends Seeder
             'view-audit-logs',
             'export-reports',               // ✅ NEW
 
+            // Dashboard
+            'view-dashboard',               // ✅ NEW
+
             // System
             'override-restrictions',
         ];
@@ -122,6 +125,7 @@ class RoleAndPermissionSeeder extends Seeder
             'generate-reports',
             'view-audit-logs',
             'export-reports',
+            'view-dashboard',
             'override-restrictions',
         ]);
 
@@ -141,6 +145,7 @@ class RoleAndPermissionSeeder extends Seeder
             'check-availability',
             'view-rates',
             'view-discounts',
+            'view-dashboard',
         ]);
 
         $this->command->info('✅ Roles created/updated successfully!');

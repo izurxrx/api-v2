@@ -40,6 +40,15 @@ class GuestEntryFacilityResource extends JsonResource
             'extension_hours' => (float) $this->extension_hours,
             'extension_amount' => (float) $this->extension_amount,
             'subtotal' => (float) $this->subtotal,
+            'is_released' => (bool) $this->is_released,
+            'released_at' => $this->released_at?->toIso8601String(),
+            'released_by' => $this->released_by,
+            'released_by_user' => $this->whenLoaded('releasedBy', function() {
+                return [
+                    'id' => $this->releasedBy->id,
+                    'full_name' => $this->releasedBy->full_name,
+                ];
+            }),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

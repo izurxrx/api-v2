@@ -16,6 +16,55 @@ class StoreGuestEntryRequest extends FormRequest
         return true;
     }
 
+    /**
+     * Auto-determine discount mode from actual values provided
+     */
+    public function determineDiscountMode(): string
+    {
+        $hasDirectDiscounts = false;
+        
+        // Check guest_details for discounts
+        if ($this->has('guest_details')) {
+            foreach ($this->guest_details as $detail) {
+                if (!empty($detail['discount_id'])) {
+                    $hasDirectDiscounts = true;
+                    break;
+                }
+            }
+        }
+        
+        // Check guest_discounts for discounts
+        if (!$hasDirectDiscounts && $this->has('guest_discounts')) {
+            foreach ($this->guest_discounts as $discount) {
+                if (!empty($discount['discount_id'])) {
+                    $hasDirectDiscounts = true;
+                    break;
+                }
+            }
+        }
+
+        $hasSeasonalDiscount = !empty($this->seasonal_discount_id);
+        $hasManualDiscount = !empty($this->manual_discount_amount) && $this->manual_discount_amount > 0;
+
+        // Determine mode based on what's actually provided
+        if ($hasDirectDiscounts && $hasManualDiscount) {
+            return 'Direct+Manual';
+        }
+        if ($hasSeasonalDiscount && $hasManualDiscount) {
+            return 'Seasonal+Manual';
+        }
+        if ($hasDirectDiscounts) {
+            return 'Direct';
+        }
+        if ($hasSeasonalDiscount) {
+            return 'Seasonal';
+        }
+        if ($hasManualDiscount) {
+            return 'Manual';
+        }
+        return 'None';
+    }
+
     public function rules()
     {
         return [
@@ -40,10 +89,33 @@ class StoreGuestEntryRequest extends FormRequest
             'check_in_time' => 'nullable|date_format:H:i',
             'number_of_guests' => 'required|integer|min:1|max:1000',
             
-            // ✅ GUEST DETAILS (for Direct discounts per guest)
-            'guest_details' => 'required|array|min:1',
-            'guest_details.*.guest_type_name' => 'required|string|in:Regular,Senior Citizen,Children below 2 yrs old,Others',
-            'guest_details.*.guest_count' => 'required|integer|min:1',
+            // ✅ GUEST BREAKDOWN (unified with booking structure)
+            'guest_breakdown' => 'sometimes|array',
+            'guest_breakdown.adult' => 'required_with:guest_breakdown|integer|min:0',
+            'guest_breakdown.senior' => 'required_with:guest_breakdown|integer|min:0',
+            'guest_breakdown.child' => 'required_with:guest_breakdown|integer|min:0',
+            
+            // ✅ GUEST DISCOUNTS (unified with booking structure)
+            'guest_discounts' => 'sometimes|array',
+            'guest_discounts.*.guest_type' => 'required|string|in:adult,senior,child',
+            'guest_discounts.*.count' => 'required|integer|min:1',
+            'guest_discounts.*.discount_id' => [
+                'nullable',
+                'exists:discounts,id',
+                function ($attribute, $value, $fail) {
+                    if ($value) {
+                        $discount = Discount::find($value);
+                        if ($discount && $discount->category !== 'Direct_Discount') {
+                            $fail('Only Direct discounts can be applied per guest type.');
+                        }
+                    }
+                },
+            ],
+            
+            // ✅ LEGACY GUEST DETAILS (backwards compatibility)
+            'guest_details' => 'sometimes|array|min:1',
+            'guest_details.*.guest_type_name' => 'required_with:guest_details|string|in:Regular,Senior Citizen,Children below 2 yrs old',
+            'guest_details.*.guest_count' => 'required_with:guest_details|integer|min:1',
             'guest_details.*.discount_id' => 'nullable|exists:discounts,id',
             
             // ✅ FACILITIES (cottages for walk-in swimming)
@@ -85,9 +157,13 @@ class StoreGuestEntryRequest extends FormRequest
             // ✅ MANUAL DISCOUNT (optional staff discount)
             'manual_discount_amount' => 'nullable|numeric|min:0|max:9999999.99',
             
-            // ❌ PAYMENT REMOVED - Now handled separately in Billing module
-            // Walk-in entries create billing record with unpaid status
-            // Payment is collected via Billing module after entry is created
+            // ✅ PAYMENT (OPTIONAL - can be recorded later via billing module)
+            'payment' => 'sometimes|array',
+            'payment.amount_paid' => 'required_with:payment|numeric|min:0',
+            'payment.payment_method' => 'required_with:payment|string|in:Cash,Card,GCash,Bank Transfer,Online',
+            'payment.change_amount' => 'nullable|numeric|min:0',
+            'payment.reference_number' => 'nullable|string|max:255',
+            'payment.notes' => 'nullable|string|max:500',
             
             // ✅ NOTES
             'notes' => 'nullable|string|max:1000',
@@ -118,10 +194,71 @@ class StoreGuestEntryRequest extends FormRequest
             $data['check_in_time'] = Carbon::now()->format('H:i');
         }
         
+        // ✅ UNIFIED STRUCTURE: Convert guest_breakdown to guest_details format
+        if ($this->has('guest_breakdown')) {
+            $breakdown = $this->input('guest_breakdown');
+            $guestDetails = [];
+            
+            // Convert adult
+            $adultCount = $breakdown['adult'] ?? 0;
+            if ($adultCount > 0) {
+                $guestDetails[] = [
+                    'guest_type_name' => 'Regular',
+                    'guest_count' => $adultCount,
+                    'discount_id' => null,
+                ];
+            }
+            
+            // Convert senior
+            $seniorCount = $breakdown['senior'] ?? 0;
+            if ($seniorCount > 0) {
+                $guestDetails[] = [
+                    'guest_type_name' => 'Senior Citizen',
+                    'guest_count' => $seniorCount,
+                    'discount_id' => null,
+                ];
+            }
+            
+            // Convert child
+            $childCount = $breakdown['child'] ?? 0;
+            if ($childCount > 0) {
+                $guestDetails[] = [
+                    'guest_type_name' => 'Children below 2 yrs old',
+                    'guest_count' => $childCount,
+                    'discount_id' => null,
+                ];
+            }
+            
+            // Apply guest_discounts to matching guest types
+            if ($this->has('guest_discounts')) {
+                foreach ($this->guest_discounts as $discount) {
+                    $guestType = $discount['guest_type'];
+                    $targetTypeName = match($guestType) {
+                        'adult' => 'Regular',
+                        'senior' => 'Senior Citizen',
+                        'child' => 'Children below 2 yrs old',
+                        default => null,
+                    };
+                    
+                    if ($targetTypeName) {
+                        foreach ($guestDetails as $key => $detail) {
+                            if ($detail['guest_type_name'] === $targetTypeName) {
+                                $guestDetails[$key]['discount_id'] = $discount['discount_id'] ?? null;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            $data['guest_details'] = $guestDetails;
+        }
+        
         // Calculate total guests from guest_details
-        if ($this->has('guest_details')) {
+        if ($this->has('guest_details') || isset($data['guest_details'])) {
+            $guestDetailsToCount = $data['guest_details'] ?? $this->guest_details;
             $totalGuests = 0;
-            foreach ($this->guest_details as $detail) {
+            foreach ($guestDetailsToCount as $detail) {
                 $totalGuests += $detail['guest_count'] ?? 0;
             }
             

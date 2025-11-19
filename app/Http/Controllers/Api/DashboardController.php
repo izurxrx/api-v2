@@ -14,27 +14,38 @@ class DashboardController extends Controller
     {
         $today = Carbon::today();
 
-        $bookedToday = Booking::whereDate('check_in_date', $today)
-            ->whereIn('booking_status', ['confirmed', 'checked_in'])
+        $bookedToday = Booking::whereDate('check_in_datetime', $today)
+            ->whereIn('booking_status', ['Confirmed', 'Checked_In'])
             ->count();
-        return response()->json($bookedToday);
+        
+        return response()->json([
+            'booked_today' => $bookedToday
+        ]);
     }
 
     public function getUpcomingBookings(Request $request)
     {
-        $upcomingBookings = Booking::where('check_in_date', '>', Carbon::today())
-            ->whereIn('booking_status', ['confirmed', 'checked_in'])
+        $upcomingBookings = Booking::whereDate('check_in_datetime', '>', Carbon::today())
+            ->whereIn('booking_status', ['Confirmed', 'Checked_In'])
             ->count();
-        return response()->json($upcomingBookings);
+        
+        return response()->json([
+            'upcoming_bookings' => $upcomingBookings
+        ]);
     }
 
     public function totalGuestToday(Request $request)
     {
         $today = Carbon::today();
 
+        // Count guests currently in the resort (checked in but not checked out)
         $activeGuests = GuestEntry::where('is_checked_out', false)
             ->whereDate('entry_date', '<=', $today)
-            ->sum('number_of_guests');
+            ->where(function($query) use ($today) {
+                $query->whereNull('exit_date')
+                      ->orWhereDate('exit_date', '>=', $today);
+            })
+            ->sum('total_guests');
         return response()->json(['total_guests' => $activeGuests]);
     }
 }

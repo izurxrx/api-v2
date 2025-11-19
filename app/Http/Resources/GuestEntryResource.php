@@ -14,6 +14,9 @@ class GuestEntryResource extends JsonResource
             'entry_reference' => $this->entry_reference,
             'entry_date' => $this->entry_date?->format('Y-m-d'),
             'entry_time' => $this->entry_time?->format('H:i:s'),
+            'entry_type' => $this->entry_type,
+            'booking_id' => $this->booking_id,
+            'booking_type' => $this->booking?->booking_type ?? null,  // ✅ ADD booking_type from related booking
             'check_in_datetime' => $this->check_in_datetime?->toIso8601String(),  // ✅ ADD THIS
             'discount_mode' => $this->discount_mode,                               // ✅ ADD THIS
             'discount_id' => $this->discount_id,                                   // ✅ ADD THIS
@@ -35,6 +38,12 @@ class GuestEntryResource extends JsonResource
             'subtotal' => (float) $this->subtotal,
             'discount_amount' => (float) $this->discount_amount,
             'total_amount' => (float) $this->total_amount,
+
+            'payment_status' => $this->billing?->payment_status ?? 'unpaid',
+            'amount_paid' => (float) ($this->billing?->amount_paid ?? 0),
+            'balance' => (float) ($this->billing?->balance ?? $this->total_amount),
+            'payment_method' => $this->billing?->payments?->first()?->payment_method ?? null,
+
             // ✅ Payment info now comes from billing relationship only
             'is_checked_out' => (bool) $this->is_checked_out,
             'checkout_datetime' => $this->checkout_datetime?->toIso8601String(),  // ✅ ADD THIS
@@ -47,8 +56,8 @@ class GuestEntryResource extends JsonResource
                     'username' => $this->createdBy->username,
                 ];
             }),
-            'details' => $this->whenLoaded('details', function() use ($request) {
-                return GuestEntryDetailResource::collection($this->details)->toArray($request);
+            'guest_details' => $this->whenLoaded('guestDetails', function() use ($request) {
+                return GuestEntryDetailResource::collection($this->guestDetails)->toArray($request);
             }),
             'third_party_services' => $this->whenLoaded('thirdPartyServices', function() use ($request) {
                 return ThirdPartyServiceResource::collection($this->thirdPartyServices)->toArray($request);
@@ -64,7 +73,7 @@ class GuestEntryResource extends JsonResource
                     'total_amount' => (float) $this->billing->total_amount,
                     'amount_paid' => (float) $this->billing->amount_paid,
                     'balance' => (float) $this->billing->balance,
-                    'payment_status' => $this->billing->payment_status,
+                    'payment_status' => ucfirst($this->billing->payment_status),
                     'billing_status' => $this->billing->billing_status,
                     'billed_at' => $this->billing->billed_at?->toIso8601String(),
                     // ✅ Include payments from billing relationship

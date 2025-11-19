@@ -16,6 +16,34 @@ class StoreBookingRequest extends FormRequest
         return true;
     }
 
+    /**
+     * Auto-determine discount mode from actual values provided
+     */
+    public function determineDiscountMode(): string
+    {
+        $hasDirectDiscounts = !empty($this->guest_discounts);
+        $hasSeasonalDiscount = !empty($this->discount_id);
+        $hasManualDiscount = !empty($this->manual_discount_amount) && $this->manual_discount_amount > 0;
+
+        // Determine mode based on what's actually provided
+        if ($hasDirectDiscounts && $hasManualDiscount) {
+            return 'Direct+Manual';
+        }
+        if ($hasSeasonalDiscount && $hasManualDiscount) {
+            return 'Seasonal+Manual';
+        }
+        if ($hasDirectDiscounts) {
+            return 'Direct';
+        }
+        if ($hasSeasonalDiscount) {
+            return 'Seasonal';
+        }
+        if ($hasManualDiscount) {
+            return 'Manual';
+        }
+        return 'None';
+    }
+
     public function rules()
     {
         return [
@@ -49,8 +77,8 @@ class StoreBookingRequest extends FormRequest
             'guest_breakdown' => 'nullable|array',
             'guest_breakdown.adult' => 'nullable|integer|min:0',
             'guest_breakdown.senior' => 'nullable|integer|min:0',
-            'guest_breakdown.pwd' => 'nullable|integer|min:0',
             'guest_breakdown.child' => 'nullable|integer|min:0',
+            'guest_breakdown.infant' => 'nullable|integer|min:0',
             
             // ✅ CHECK-IN/OUT DATES
             'check_in_date' => 'required|date|date_format:Y-m-d',
@@ -70,15 +98,14 @@ class StoreBookingRequest extends FormRequest
             'facilities.*.quantity' => 'required|integer|min:1|max:100',
             'facilities.*.rate_amount' => 'required|numeric|min:0|max:9999999.99',
             
-            'discount_mode' => 'required|in:None,Direct,Seasonal,Manual',
+            // ✅ DISCOUNT MODE (optional - auto-determined from actual values)
+            'discount_mode' => 'nullable|in:None,Direct,Seasonal,Manual',
             'discount_id' => [
                 'nullable',
-                'required_if:discount_mode,Direct,Seasonal',
                 'exists:discounts,id',
             ],
             'manual_discount_amount' => [
                 'nullable',
-                'required_if:discount_mode,Manual',
                 'numeric',
                 'min:0',
                 'max:9999999.99',
@@ -86,7 +113,7 @@ class StoreBookingRequest extends FormRequest
             
             // ✅ GUEST DISCOUNTS (for Direct mode per-guest discounts)
             'guest_discounts' => 'nullable|array',
-            'guest_discounts.*.guest_type' => 'required_with:guest_discounts|string|in:senior,pwd,child',
+            'guest_discounts.*.guest_type' => 'required_with:guest_discounts|string|in:senior,child',
             'guest_discounts.*.count' => 'required_with:guest_discounts|integer|min:1',
             'guest_discounts.*.discount_id' => 'required_with:guest_discounts|exists:discounts,id',
             
@@ -126,13 +153,13 @@ class StoreBookingRequest extends FormRequest
         
         // Calculate guest breakdown total if provided
         if ($this->has('guest_breakdown')) {
-            $total = ($this->input('guest_breakdown.adult', 0) +
-                     $this->input('guest_breakdown.senior', 0) +
-                     $this->input('guest_breakdown.pwd', 0) +
-                     $this->input('guest_breakdown.child', 0));
+            $guestBreakdownTotal = $this->input('guest_breakdown.adult', 0) +
+                                 $this->input('guest_breakdown.senior', 0) +
+                                 $this->input('guest_breakdown.child', 0) +
+                                 $this->input('guest_breakdown.infant', 0);
             
-            if ($total > 0 && !$this->has('number_of_guests')) {
-                $data['number_of_guests'] = $total;
+            if ($guestBreakdownTotal > 0 && !$this->has('number_of_guests')) {
+                $data['number_of_guests'] = $guestBreakdownTotal;
             }
         }
         
@@ -195,8 +222,8 @@ class StoreBookingRequest extends FormRequest
             if ($this->has('guest_breakdown')) {
                 $total = ($this->input('guest_breakdown.adult', 0) +
                          $this->input('guest_breakdown.senior', 0) +
-                         $this->input('guest_breakdown.pwd', 0) +
-                         $this->input('guest_breakdown.child', 0));
+                         $this->input('guest_breakdown.child', 0) +
+                         $this->input('guest_breakdown.infant', 0));
                 
                 if ($total !== $this->number_of_guests) {
                     $validator->errors()->add('guest_breakdown', 
@@ -289,9 +316,11 @@ class StoreBookingRequest extends FormRequest
     {
         // Swimming bookings discount rules
         if ($this->booking_type === 'Swimming') {
+            // ✅ Use auto-determined discount mode for validation
+            $determinedMode = $this->determineDiscountMode();
             
             // Check Direct + Seasonal stacking (NOT ALLOWED)
-            if ($this->discount_mode === 'Direct' && $this->discount_id) {
+            if ($determinedMode === 'Direct' && $this->discount_id) {
                 $discount = Discount::find($this->discount_id);
                 if ($discount && $discount->category === 'Seasonal_Discount') {
                     $validator->errors()->add('discount_mode', 
@@ -300,7 +329,7 @@ class StoreBookingRequest extends FormRequest
             }
             
             // Validate Direct discount requires guest breakdown
-            if ($this->discount_mode === 'Direct' && !$this->has('guest_discounts')) {
+            if ($determinedMode === 'Direct' && !$this->has('guest_discounts')) {
                 $validator->errors()->add('guest_discounts', 
                     'Direct discount mode requires specifying which guests receive the discount.');
             }
@@ -317,7 +346,7 @@ class StoreBookingRequest extends FormRequest
             }
             
             // Validate Seasonal discount
-            if ($this->discount_mode === 'Seasonal' && $this->discount_id) {
+            if ($determinedMode === 'Seasonal' && $this->discount_id) {
                 $discount = Discount::find($this->discount_id);
                 if ($discount && $discount->category !== 'Seasonal_Discount') {
                     $validator->errors()->add('discount_id', 
@@ -339,14 +368,20 @@ class StoreBookingRequest extends FormRequest
         
         // Package bookings can only have Manual discount
         if ($this->booking_type === 'Package') {
-            if ($this->discount_mode !== 'None' && $this->discount_mode !== 'Manual') {
+            // ✅ Use auto-determined discount mode for validation
+            $determinedMode = $this->determineDiscountMode();
+            
+            // Check if the determined mode is invalid for Package bookings
+            if (!in_array($determinedMode, ['None', 'Manual'])) {
                 $validator->errors()->add('discount_mode', 
                     'Package bookings can only have Manual discounts. Direct and Seasonal discounts are for Swimming bookings only.');
             }
         }
         
         // Manual discount validation
-        if ($this->discount_mode === 'Manual') {
+        // ✅ Check determined mode, not the submitted one
+        $determinedMode = $this->determineDiscountMode();
+        if (str_contains($determinedMode, 'Manual')) {
             if (!$this->manual_discount_amount || $this->manual_discount_amount <= 0) {
                 $validator->errors()->add('manual_discount_amount', 
                     'Manual discount amount must be greater than 0.');

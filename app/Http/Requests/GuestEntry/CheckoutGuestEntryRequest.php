@@ -26,6 +26,9 @@ class CheckoutGuestEntryRequest extends FormRequest
                 'date_format:H:i',
             ],
 
+            // ✅ Overtime application (opt-in)
+            'apply_overtime' => 'nullable|boolean',
+
             // ✅ Notes
             'notes' => 'nullable|string|max:1000',
         ];

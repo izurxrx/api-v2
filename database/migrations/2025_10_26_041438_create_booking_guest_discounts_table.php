@@ -18,10 +18,11 @@ return new class extends Migration
         Schema::create('booking_guest_discounts', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('booking_id');
+            $table->string('guest_type'); // Guest type: senior, pwd, child
             $table->unsignedBigInteger('discount_id'); // Direct discount (Senior, PWD, Child)
             $table->integer('guest_count'); // Number of guests with this discount
-            $table->decimal('discount_per_guest', 10, 2); // Discount amount per guest
-            $table->decimal('total_discount', 10, 2); // guest_count × discount_per_guest
+            $table->decimal('discount_per_guest', 10, 2)->nullable(); // Discount amount per guest
+            $table->decimal('total_discount', 10, 2)->nullable(); // guest_count × discount_per_guest
             $table->timestamps();
             
             $table->foreign('booking_id')

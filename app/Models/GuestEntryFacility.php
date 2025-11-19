@@ -23,6 +23,9 @@ class GuestEntryFacility extends Model
         'extension_hours',
         'extension_amount',
         'subtotal',
+        'is_released',
+        'released_at',
+        'released_by',
     ];
 
     protected $casts = [
@@ -33,6 +36,8 @@ class GuestEntryFacility extends Model
         'extension_hours' => 'decimal:2',
         'extension_amount' => 'decimal:2',
         'subtotal' => 'decimal:2',
+        'is_released' => 'boolean',
+        'released_at' => 'datetime',
     ];
 
     // Activity Log Configuration
@@ -58,5 +63,10 @@ class GuestEntryFacility extends Model
     public function rate()
     {
         return $this->belongsTo(Rate::class);
+    }
+
+    public function releasedBy()
+    {
+        return $this->belongsTo(User::class, 'released_by');
     }
 }

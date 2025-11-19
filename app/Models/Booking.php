@@ -39,6 +39,10 @@ class Booking extends Model
         'booking_status',
         'cancellation_deadline',
         'cancellation_reason',
+        'cancelled_at',             // ✅ FIXED: Add missing field
+        'cancelled_by',             // ✅ FIXED: Add missing field
+        'actual_guests',            // ✅ FIXED: Add missing field
+        'entrance_subtotal',        // ✅ FIXED: Add missing field
         'facility_subtotal',
         'third_party_service_amount',
         'subtotal',
@@ -55,9 +59,11 @@ class Booking extends Model
         'check_in_datetime' => 'datetime',
         'check_out_datetime' => 'datetime',
         'cancellation_deadline' => 'datetime',
+        'cancelled_at' => 'datetime',
         'actual_check_in_datetime' => 'datetime',
         'actual_check_out_datetime' => 'datetime',
         'guest_breakdown' => 'array',
+        'entrance_subtotal' => 'decimal:2',
         'facility_subtotal' => 'decimal:2',
         'subtotal' => 'decimal:2',
         'third_party_service_amount' => 'decimal:2',
@@ -109,6 +115,11 @@ class Booking extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public function confirmedBy()
+    {
+        return $this->belongsTo(User::class, 'confirmed_by');
+    }
+
     public function checkedInBy()
     {
         return $this->belongsTo(User::class, 'checked_in_by');
@@ -117,6 +128,11 @@ class Booking extends Model
     public function checkedOutBy()
     {
         return $this->belongsTo(User::class, 'checked_out_by');
+    }
+
+    public function cancelledBy()
+    {
+        return $this->belongsTo(User::class, 'cancelled_by');
     }
 
     /**
@@ -141,15 +157,12 @@ class Booking extends Model
     
     /**
      * Check if booking can be cancelled
+     * Staff/Admin can cancel Pending or Confirmed bookings regardless of deadline
      */
     public function canBeCancelled(): bool
     {
-        if (!in_array($this->booking_status, ['Pending', 'Confirmed'])) {
-            return false;
-        }
-        
-        // Can cancel if before cancellation deadline (72 hours before check-in)
-        return now()->isBefore($this->cancellation_deadline);
+        // Only Pending and Confirmed bookings can be cancelled
+        return in_array($this->booking_status, ['Pending', 'Confirmed']);
     }
 
     /**
@@ -232,9 +245,17 @@ class Booking extends Model
     }
 
     /**
-     * 🔧 ADD: Discount relationship
+     * Get all guest-specific discounts for this booking (Direct discount mode)
      */
     public function guestDiscounts()
+    {
+        return $this->hasMany(BookingGuestDiscount::class);
+    }
+
+    /**
+     * Get the seasonal/manual discount (if applicable)
+     */
+    public function discount()
     {
         return $this->belongsTo(Discount::class, 'discount_id');
     }

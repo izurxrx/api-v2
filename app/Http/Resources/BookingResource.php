@@ -117,13 +117,14 @@ class BookingResource extends JsonResource
             'cancellation_reason' => $this->cancellation_reason,
             
             // Amounts
+            'entrance_subtotal' => (float) ($this->entrance_subtotal ?? 0),
             'facility_subtotal' => (float) $this->facility_subtotal,
             'third_party_service_amount' => (float) $this->third_party_service_amount,
             'subtotal' => (float) $this->subtotal,
             'total_amount' => (float) $this->total_amount,
             
             // Payment fields (from billing relationship)
-            'payment_status' => $this->billing?->payment_status ?? 'unpaid',
+            'payment_status' => $this->billing ? $this->billing->payment_status : 'unpaid',
             'amount_paid' => (float) ($this->billing?->amount_paid ?? 0),
             'balance' => (float) ($this->billing?->balance ?? $this->total_amount),
             
@@ -146,25 +147,45 @@ class BookingResource extends JsonResource
                 ];
             }),
             
-            // Payments
-            'payments' => $this->whenLoaded('payments', function() use ($request) {
-                return PaymentResource::collection($this->payments)->toArray($request);
-            }),
-            
-            // Billing
-            'billing' => $this->whenLoaded('billing', function() {
+            // Billing (includes payments and extensions through billing relationship)
+            'billing' => $this->whenLoaded('billing', function() use ($request) {
                 return $this->billing ? [
                     'id' => $this->billing->id,
                     'billing_number' => $this->billing->billing_number,
                     'total_amount' => (float) $this->billing->total_amount,
+                    'total_amount_raw' => (float) $this->billing->total_amount,
                     'amount_paid' => (float) $this->billing->amount_paid,
+                    'amount_paid_raw' => (float) $this->billing->amount_paid,
                     'balance' => (float) $this->billing->balance,
+                    'balance_raw' => (float) $this->billing->balance,
                     'downpayment_amount' => (float) $this->billing->downpayment_amount,
                     'downpayment_paid' => (float) $this->billing->downpayment_paid,
                     'is_downpayment_paid' => (bool) $this->billing->is_downpayment_paid,
                     'payment_status' => $this->billing->payment_status,
                     'billing_status' => $this->billing->billing_status,
                     'billed_at' => $this->billing->billed_at?->toIso8601String(),
+                    // Refund tracking
+                    'refund_amount' => (float) $this->billing->refund_amount,
+                    'refund_amount_raw' => (float) $this->billing->refund_amount,
+                    'refund_reason' => $this->billing->refund_reason,
+                    'refunded_by' => $this->billing->refunded_by,
+                    'refunded_at' => $this->billing->refunded_at?->toIso8601String(),
+                    // ✅ Include payments from billing relationship
+                    'payments' => $this->billing->payments ? 
+                        PaymentResource::collection($this->billing->payments)->toArray($request) : [],
+                    // ✅ Include extensions from billing relationship
+                    'extensions' => $this->billing->extensions ? 
+                        $this->billing->extensions->map(function($ext) {
+                            return [
+                                'id' => $ext->id,
+                                'extension_type' => $ext->extension_type,
+                                'description' => $ext->description,
+                                'amount' => (float) $ext->amount,
+                                'quantity' => $ext->quantity,
+                                'total_amount' => (float) $ext->total_amount,
+                                'created_at' => $ext->created_at->toIso8601String(),
+                            ];
+                        })->toArray() : [],
                 ] : null;
             }),
             
@@ -187,6 +208,26 @@ class BookingResource extends JsonResource
                         : '₱' . number_format($this->discount->value, 2),
                 ] : null;
             }),
+            
+            // ✅ Direct discount per-guest breakdown
+            'guest_discounts' => $this->whenLoaded('guestDiscounts', function() {
+                return $this->guestDiscounts->map(function($guestDiscount) {
+                    return [
+                        'id' => $guestDiscount->id,
+                        'guest_type' => $guestDiscount->guest_type,
+                        'guest_count' => $guestDiscount->guest_count,
+                        'discount' => $guestDiscount->discount ? [
+                            'id' => $guestDiscount->discount->id,
+                            'name' => $guestDiscount->discount->discount_name,
+                            'category' => $guestDiscount->discount->category,
+                            'type' => $guestDiscount->discount->discount_type,
+                            'value' => (float) $guestDiscount->discount->value,
+                        ] : null,
+                        'discount_amount' => (float) $guestDiscount->discount_amount,
+                    ];
+                });
+            }),
+            
             'manual_discount_amount' => (float) $this->manual_discount_amount,
             'discount_amount' => (float) $this->discount_amount,
         ];

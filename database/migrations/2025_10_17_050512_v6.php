@@ -20,9 +20,11 @@ return new class extends Migration
         // Drop the amounts constraint (likely references manual_discount_amount)
         DB::statement("ALTER TABLE guest_entry_details DROP CONSTRAINT IF EXISTS chk_amounts_non_negative");
         
-        // Step 2: Drop the manual_discount_amount column
+        // Step 2: Drop the manual_discount_amount column (only if exists)
         Schema::table('guest_entry_details', function (Blueprint $table) {
-            $table->dropColumn('manual_discount_amount');
+            if (Schema::hasColumn('guest_entry_details', 'manual_discount_amount')) {
+                $table->dropColumn('manual_discount_amount');
+            }
         });
 
         // Step 3: Recreate the amounts CHECK constraint without manual_discount_amount

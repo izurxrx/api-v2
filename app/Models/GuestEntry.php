@@ -16,11 +16,14 @@ class GuestEntry extends Model
         'booking_id', // ✅ NEW: Link to booking
         'entry_type', // ✅ NEW: 'walk_in' or 'booking'
         'entry_reference',
+        'entrance_rate_id', // ✅ FIXED: Add missing field
         'entry_date',
         'entry_time',
         'check_in_datetime',
         'discount_mode',
         'discount_id',
+        'seasonal_discount_id', // ✅ For seasonal discounts
+        'seasonal_discount_amount', // ✅ Seasonal discount amount
         'manual_discount_amount', 
         'guest_name',
         'contact_number',
@@ -52,6 +55,7 @@ class GuestEntry extends Model
         'third_party_service_amount' => 'decimal:2',
         'subtotal' => 'decimal:2',
         'discount_amount' => 'decimal:2',
+        'seasonal_discount_amount' => 'decimal:2',
         'manual_discount_amount' => 'decimal:2',
         'total_amount' => 'decimal:2',
         // ❌ REMOVED: amount_paid, balance casts
@@ -75,9 +79,17 @@ class GuestEntry extends Model
     // RELATIONSHIPS
     // ========================================
     
-    public function guestdetails()
+    public function guestDetails()
     {
         return $this->hasMany(GuestEntryDetail::class);
+    }
+    
+    /**
+     * @deprecated Use guestDetails() instead
+     */
+    public function details()
+    {
+        return $this->guestDetails();
     }
 
     public function facilities()
@@ -88,6 +100,11 @@ class GuestEntry extends Model
     public function createdBy()
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function checkedInBy()
+    {
+        return $this->belongsTo(User::class, 'checked_in_by');
     }
 
     public function checkedOutBy()

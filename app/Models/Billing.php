@@ -73,6 +73,9 @@ class Billing extends Model
         'amount_paid',
         'balance',
         'refund_amount',
+        'refund_reason',
+        'refunded_by',
+        'refunded_at',
         'payment_status',
         'billing_status',
         'billed_at',
@@ -99,6 +102,7 @@ class Billing extends Model
         'due_date' => 'datetime',
         'paid_at' => 'datetime',
         'voided_at' => 'datetime',
+        'refunded_at' => 'datetime',
     ];
 
     // ========================================
@@ -228,6 +232,14 @@ class Billing extends Model
         return $this->hasMany(Payment::class);
     }
 
+    /**
+     * Get all extensions for this billing
+     */
+    public function extensions()
+    {
+        return $this->hasMany(BillingExtension::class);
+    }
+
     public function createdBy()
     {
         return $this->belongsTo(User::class, 'created_by');
@@ -236,6 +248,11 @@ class Billing extends Model
     public function cancelledBy()
     {
         return $this->belongsTo(User::class, 'cancelled_by');
+    }
+
+    public function refundedBy()
+    {
+        return $this->belongsTo(User::class, 'refunded_by');
     }
 
     // ========================================
@@ -330,11 +347,26 @@ class Billing extends Model
             $paymentStatus = self::PAYMENT_UNPAID;
         }
 
+        // Calculate downpayment_paid - track how much has been paid towards downpayment
+        $currentDownpaymentPaid = $this->downpayment_paid ?? 0; // Handle NULL
+        $newDownpaymentPaid = $currentDownpaymentPaid + $amount;
+        // Cap at downpayment_amount (excess goes to balance)
+        if ($newDownpaymentPaid > $this->downpayment_amount) {
+            $newDownpaymentPaid = $this->downpayment_amount;
+        }
+
+        // Check if downpayment requirement is now met
+        $isDownpaymentPaid = $newDownpaymentPaid >= $this->downpayment_amount;
+
         // Update billing
+        // ✅ NOTE: billing_status is NOT changed to 'completed' here
+        // It only becomes 'completed' when guest checks out (via checkout endpoint)
         $this->update([
             'amount_paid' => $newAmountPaid,
             'balance' => max(0, $newBalance),
             'payment_status' => $paymentStatus,
+            'downpayment_paid' => $newDownpaymentPaid,
+            'is_downpayment_paid' => $isDownpaymentPaid,
             'paid_at' => $paymentStatus === self::PAYMENT_PAID ? now() : $this->paid_at,
         ]);
 
@@ -419,8 +451,49 @@ class Billing extends Model
             }
         }
         
-        // For Guest Entries - billing status changes are sufficient
-        // Guest entries are created as "Active" and don't need status updates based on payment
+        // For Guest Entries
+        if ($billable instanceof GuestEntry) {
+            // ✅ Walk-in transactions complete immediately upon full payment
+            if ($billable->entry_type === 'walk_in' && $this->balance <= 0) {
+                // Close the billing transaction for walk-ins
+                $this->update([
+                    'billing_status' => self::STATUS_COMPLETED,
+                    'payment_status' => self::PAYMENT_PAID,
+                    'paid_at' => $this->paid_at ?? now(),
+                ]);
+                
+                Log::info('Walk-in transaction completed upon payment', [
+                    'guest_entry_id' => $billable->id,
+                    'billing_id' => $this->id,
+                    'entry_reference' => $billable->entry_reference,
+                    'amount_paid' => $this->amount_paid,
+                ]);
+            }
+            
+            // ✅ Swimming booking entries complete immediately upon full payment (day use, no checkout)
+            if ($billable->booking_id && $this->balance <= 0) {
+                $booking = $billable->booking;
+                
+                if ($booking && $booking->booking_type === 'Swimming') {
+                    // Close the billing transaction for Swimming bookings
+                    $this->update([
+                        'billing_status' => self::STATUS_COMPLETED,
+                        'payment_status' => self::PAYMENT_PAID,
+                        'paid_at' => $this->paid_at ?? now(),
+                    ]);
+                    
+                    Log::info('Swimming booking transaction completed upon payment', [
+                        'guest_entry_id' => $billable->id,
+                        'booking_id' => $booking->id,
+                        'billing_id' => $this->id,
+                        'booking_reference' => $booking->booking_reference,
+                        'amount_paid' => $this->amount_paid,
+                    ]);
+                }
+            }
+            
+            // Package booking-based guest entries still require checkout
+        }
     }
 
     /**

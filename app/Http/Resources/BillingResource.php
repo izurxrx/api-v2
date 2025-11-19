@@ -70,6 +70,16 @@ class BillingResource extends JsonResource
                 'name' => $this->cancelledBy?->full_name,
             ]),
             
+            // Refund tracking (NEW)
+            'refund_reason' => $this->refund_reason,
+            'refunded_by' => $this->refunded_by,
+            'refunded_by_user' => $this->when($this->refundedBy, [
+                'id' => $this->refundedBy?->id,
+                'name' => $this->refundedBy?->full_name,
+            ]),
+            'refunded_at' => $this->refunded_at?->format('Y-m-d H:i:s'),
+            'refunded_at_formatted' => $this->refunded_at?->format('M d, Y h:i A'),
+            
             // Staff
             'created_by' => [
                 'id' => $this->createdBy?->id,
@@ -80,6 +90,31 @@ class BillingResource extends JsonResource
             // Payments
             'payments' => PaymentResource::collection($this->whenLoaded('payments')),
             'payment_count' => $this->payments?->count() ?? 0,
+            
+            // Extensions (NEW)
+            'extensions' => $this->whenLoaded('extensions', function() {
+                return $this->extensions->map(function($extension) {
+                    return [
+                        'id' => $extension->id,
+                        'billing_id' => $extension->billing_id,
+                        'extension_type' => $extension->extension_type,
+                        'description' => $extension->description,
+                        'amount' => number_format($extension->amount, 2),
+                        'amount_raw' => (float) $extension->amount,
+                        'quantity' => $extension->quantity,
+                        'total_amount' => number_format($extension->total_amount, 2),
+                        'total_amount_raw' => (float) $extension->total_amount,
+                        'metadata' => $extension->metadata,
+                        'added_by' => $extension->added_by,
+                        'added_by_user' => $extension->addedBy ? [
+                            'id' => $extension->addedBy->id,
+                            'name' => $extension->addedBy->full_name,
+                        ] : null,
+                        'created_at' => $extension->created_at->format('Y-m-d H:i:s'),
+                    ];
+                });
+            }),
+            'extensions_count' => $this->extensions?->count() ?? 0,
             
             // Billable details (when loaded)
             'billable' => $this->when($this->relationLoaded('billable'), function() use ($billable) {

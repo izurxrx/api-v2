@@ -43,6 +43,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [BookingController::class, 'store'])
             ->middleware('permission:manage-bookings');
 
+        Route::get('/summary', [BookingController::class, 'summary'])
+            ->middleware('permission:view-dashboard');
+
+        Route::get('/entrance-rates', [BookingController::class, 'getEntranceRates'])
+            ->middleware('permission:view-rates');
+
         Route::get('/archived', [BookingController::class, 'archived'])
             ->middleware('permission:view-audit-logs'); // Changed: Only Manager/Admin can view archives
 
@@ -61,12 +67,18 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{id}/check-in', [BookingController::class, 'checkIn'])
             ->middleware('permission:check-in-guests'); // Changed: Staff can check-in
 
+        Route::post('/{id}/preview-check-out', [BookingController::class, 'previewCheckout'])
+            ->middleware('permission:check-in-guests'); // Preview overtime charges before checkout
+
         Route::post('/{id}/check-out', [BookingController::class, 'checkOut'])
             ->middleware('permission:check-in-guests'); // Changed: Staff can check-out
 
-        // ✅ NEW: Downpayment endpoint (Staff can record)
-        Route::post('/{id}/downpayment', [BookingController::class, 'recordDownpayment'])
-            ->middleware('permission:record-downpayment');
+        // NOTE: Downpayment is recorded via BillingController::recordPayment() or PaymentController::store()
+        // The booking status automatically changes from Pending → Confirmed when downpayment threshold is met
+
+        // ✅ NEW: Cancel and Refund booking (Manager only)
+        Route::post('/{id}/cancel-refund', [BookingController::class, 'cancelRefund'])
+            ->middleware('permission:cancel-bookings');
 
         Route::post('/{id}/cancel', [BookingController::class, 'cancel'])
             ->middleware('permission:cancel-bookings'); // Changed: Manager/Admin only
@@ -82,6 +94,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [GuestMonitoringController::class, 'store'])
             ->middleware('permission:process-walk-ins');
 
+        Route::get('/active', [GuestMonitoringController::class, 'activeGuests'])
+            ->middleware('permission:view-walk-ins');
+
+        Route::get('/today-summary', [GuestMonitoringController::class, 'todaySummary'])
+            ->middleware('permission:view-dashboard');
+
+        Route::get('/available-discounts', [GuestMonitoringController::class, 'getAvailableDiscounts'])
+            ->middleware('permission:view-discounts');
+
         // ✅ NEW: Check in a booking
         Route::post('/check-in-booking/{bookingId}', [GuestMonitoringController::class, 'checkInBooking'])
             ->middleware('permission:check-in-guests');
@@ -95,8 +116,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{id}', [GuestMonitoringController::class, 'update'])
             ->middleware('permission:process-walk-ins');
         
+        Route::post('/{id}/preview-checkout', [GuestMonitoringController::class, 'previewCheckout'])
+            ->middleware('permission:checkout-walk-ins');
+        
         Route::post('/{id}/checkout', [GuestMonitoringController::class, 'checkout'])
             ->middleware('permission:checkout-walk-ins');
+        
+        // ✅ NEW: Release facility extension (for day-use guests)
+        Route::post('/{guestEntryId}/release-facility/{extensionId}', [GuestMonitoringController::class, 'releaseFacility'])
+            ->middleware('permission:process-walk-ins');
+        
+        // ✅ NEW: Release initial facility (for day-use guests)
+        Route::post('/{guestEntryId}/release-initial-facility/{guestEntryFacilityId}', [GuestMonitoringController::class, 'releaseInitialFacility'])
+            ->middleware('permission:process-walk-ins');
         
         Route::delete('/{id}', [GuestMonitoringController::class, 'destroy'])
             ->middleware('permission:process-walk-ins');
@@ -128,6 +160,12 @@ Route::middleware('auth:sanctum')->group(function () {
         
         // ✅ FACILITY CRUD
         Route::get('/', [FacilityController::class, 'index'])
+            ->middleware('permission:view-facilities');
+        
+        Route::get('/walk-in', [FacilityController::class, 'showWalkInFacilities'])
+            ->middleware('permission:view-facilities');
+
+        Route::post('/booking', [FacilityController::class, 'showBookingFacilities'])
             ->middleware('permission:view-facilities');
         
         Route::post('/', [FacilityController::class, 'store'])
@@ -286,6 +324,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // Record payment for a billing
         Route::post('/{id}/payment', [BillingController::class, 'recordPayment'])
             ->middleware('permission:process-payments');
+        
+        // ✅ NEW: Add extension to billing (mid-stay charges)
+        Route::post('/{id}/add-extension', [BillingController::class, 'addExtension'])
+            ->middleware('permission:manage-bookings');
         
         // Cancel/void a billing
         Route::post('/{id}/cancel', [BillingController::class, 'cancel'])

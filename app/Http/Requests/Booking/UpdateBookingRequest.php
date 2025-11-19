@@ -16,57 +16,92 @@ class UpdateBookingRequest extends FormRequest
 
     public function rules()
     {
+        $booking = \App\Models\Booking::find($this->route('id'));
+        
+        // ✅ For Confirmed bookings, only allow contact details
+        if ($booking && $booking->booking_status === 'Confirmed') {
+            return [
+                'guest_name' => 'required|string|min:2|max:255',
+                'contact_number' => 'required|string|max:20',
+                'special_requests' => 'nullable|string|max:1000',
+            ];
+        }
+        
+        // ✅ Full validation for Pending bookings only
         return [
-            // Guest Information
-            'guest_name' => 'required|string|max:255',
+            // ✅ BOOKING TYPE
+            'booking_type' => 'required|in:Swimming,Package',
+            
+            // ✅ ENTRANCE RATE (required for Swimming)
+            'entrance_rate_id' => 'nullable|required_if:booking_type,Swimming|exists:rates,id',
+            
+            // ✅ GUEST INFORMATION
+            'guest_name' => 'required|string|min:2|max:255',
             'contact_number' => 'required|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'number_of_guests' => 'required|integer|min:1',
             
-            // Booking Dates & Times
-            'check_in_date' => 'required|date',
-            'check_in_time' => 'required',
-            'check_out_date' => 'required|date|after:check_in_date',
-            'check_out_time' => 'required',
+            // ✅ CHECK-IN/OUT DATES
+            'check_in_date' => 'required|date|date_format:Y-m-d',
+            'check_out_date' => 'required|date|date_format:Y-m-d|after_or_equal:check_in_date',
+            'check_in_time' => 'nullable|date_format:H:i',
+            'check_out_time' => 'nullable|date_format:H:i',
             
-            // Facilities
+            // ✅ FACILITIES (REQUIRED)
             'facilities' => 'required|array|min:1',
-            'facilities.*.facility_id' => 'required|exists:facilities,id',
-            'facilities.*.rate_id' => 'nullable|exists:rates,id',
+            'facilities.*.facility_id' => 'required|integer|exists:facilities,id',
+            'facilities.*.rate_id' => 'required|integer|exists:rates,id',
             'facilities.*.quantity' => 'required|integer|min:1',
-            'facilities.*.guest_count' => 'required|integer|min:1',
-            'facilities.*.rate_price' => 'required|numeric|min:0',
-            'facilities.*.subtotal' => 'required|numeric|min:0',
+            'facilities.*.rate_amount' => 'required|numeric|min:0',
             
-            // Third Party Services (Optional)
-            'third_party_services' => 'nullable|array',
-            'third_party_services.*.service_id' => 'required_with:third_party_services|exists:third_party_services,id',
-            'third_party_services.*.quantity' => 'required_with:third_party_services|integer|min:1',
-            'third_party_services.*.price' => 'required_with:third_party_services|numeric|min:0',
-            'third_party_services.*.subtotal' => 'required_with:third_party_services|numeric|min:0',
-            
-            // Discount
-            'discount_mode' => 'nullable|in:None,Seasonal,Manual',
+            // ✅ DISCOUNTS
+            'discount_mode' => 'nullable|in:None,Direct,Seasonal,Manual',
             'discount_id' => 'nullable|exists:discounts,id',
             'manual_discount_amount' => 'nullable|numeric|min:0',
             
-            // Notes
-            'notes' => 'nullable|string',
+            // ✅ GUEST DISCOUNTS (for Direct mode)
+            'guest_discounts' => 'nullable|array',
+            'guest_discounts.*.guest_type' => 'required_with:guest_discounts|string|in:senior,child',
+            'guest_discounts.*.count' => 'required_with:guest_discounts|integer|min:1',
+            'guest_discounts.*.discount_id' => 'required_with:guest_discounts|exists:discounts,id',
+            
+            // ✅ THIRD PARTY SERVICES (Optional)
+            'third_party_services' => 'nullable|array',
+            'third_party_services.*.service_name' => 'required_with:third_party_services|string|max:255',
+            'third_party_services.*.amount' => 'required_with:third_party_services|numeric|min:0',
+            
+            // ✅ NOTES
+            'special_requests' => 'nullable|string|max:1000',
+            'notes' => 'nullable|string|max:1000',
         ];
     }
 
     public function withValidator($validator)
     {
         $validator->after(function ($validator) {
-            // Parse check-in and check-out datetime
-            $checkInDateTime = Carbon::parse($this->check_in_date . ' ' . $this->check_in_time);
-            $checkOutDateTime = Carbon::parse($this->check_out_date . ' ' . $this->check_out_time);
-
-            // Validate datetime logic
-            if ($checkOutDateTime <= $checkInDateTime) {
-                $validator->errors()->add('check_out_date', 'Check-out must be after check-in time.');
-            }
-
             // Get booking ID being updated
-            $bookingId = $this->route('id'); // Assumes route is /api/bookings/{id}
+            $bookingId = $this->route('id');
+            $booking = \App\Models\Booking::find($bookingId);
+            
+            // ✅ Skip complex validation for Confirmed bookings (only contact details allowed)
+            if ($booking && $booking->booking_status === 'Confirmed') {
+                return;
+            }
+            
+            // ✅ Full validation only for Pending bookings
+            // Only validate datetime logic if both times are provided
+            if ($this->check_in_time && $this->check_out_time) {
+                try {
+                    $checkInDateTime = Carbon::parse($this->check_in_date . ' ' . $this->check_in_time);
+                    $checkOutDateTime = Carbon::parse($this->check_out_date . ' ' . $this->check_out_time);
+
+                    if ($checkOutDateTime <= $checkInDateTime) {
+                        $validator->errors()->add('check_out_date', 'Check-out must be after check-in time.');
+                    }
+                } catch (\Exception $e) {
+                    // Time parsing will be caught by format validation
+                }
+            }
 
             // Validate facilities
             if ($this->has('facilities')) {
@@ -95,33 +130,36 @@ class UpdateBookingRequest extends FormRequest
                         continue;
                     }
 
-                    // NEW (CORRECT):
-                    $guestCount = $facilityData['guest_count'] ?? 0;
-                    if ($guestCount > $facility->max_capacity) {  // ✅ Use max_capacity
-                        $validator->errors()->add(
-                            "facilities.{$index}.guest_count",
-                            "Guest count ({$guestCount}) exceeds facility maximum capacity ({$facility->max_capacity}) per unit."
-                        );
-                    }
-
-                    // ✅ Check available quantity (exclude current booking)
-                    $requestedQuantity = $facilityData['quantity'] ?? 1;
+                    // ✅ REMOVED: guest_count validation - not used in update
+                    // The update doesn't use guest_count per facility
                     
-                    $availabilityRule = new FacilityAvailable(
-                        $facility->id,
-                        $checkInDateTime,
-                        $checkOutDateTime,
-                        $requestedQuantity,
-                        $bookingId // ✅ Exclude this booking from availability check
-                    );
+                    // ✅ Check available quantity (exclude current booking) - only if times provided
+                    if ($this->check_in_time && $this->check_out_time) {
+                        try {
+                            $checkInDateTime = Carbon::parse($this->check_in_date . ' ' . $this->check_in_time);
+                            $checkOutDateTime = Carbon::parse($this->check_out_date . ' ' . $this->check_out_time);
+                            
+                            $requestedQuantity = $facilityData['quantity'] ?? 1;
+                            
+                            $availabilityRule = new FacilityAvailable(
+                                $facility->id,
+                                $checkInDateTime,
+                                $checkOutDateTime,
+                                $requestedQuantity,
+                                $bookingId
+                            );
 
-                    $availabilityRule->validate(
-                        "facilities.{$index}.facility_id",
-                        $facility->id,
-                        function($message) use ($validator, $index) {
-                            $validator->errors()->add("facilities.{$index}.facility_id", $message);
+                            $availabilityRule->validate(
+                                "facilities.{$index}.facility_id",
+                                $facility->id,
+                                function($message) use ($validator, $index) {
+                                    $validator->errors()->add("facilities.{$index}.facility_id", $message);
+                                }
+                            );
+                        } catch (\Exception $e) {
+                            // Skip availability check if time parsing fails
                         }
-                    );
+                    }
                 }
             }
         });

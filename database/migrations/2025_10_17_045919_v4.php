@@ -37,18 +37,21 @@ return new class extends Migration
         // ====================================================================
         
         Schema::table('guest_entries', function (Blueprint $table) {
-            // Add discount_id for Seasonal mode
-            $table->unsignedBigInteger('discount_id')->nullable()->after('discount_mode');
-            $table->index('discount_id', 'idx_discount_id');
+            // Add discount_id for Seasonal mode (only if not exists)
+            if (!Schema::hasColumn('guest_entries', 'discount_id')) {
+                $table->unsignedBigInteger('discount_id')->nullable()->after('discount_mode');
+                $table->index('discount_id', 'idx_discount_id');
+                
+                $table->foreign('discount_id', 'guest_entries_discount_id_foreign')
+                      ->references('id')
+                      ->on('discounts')
+                      ->onDelete('set null');
+            }
             
-            // Add foreign key
-            $table->foreign('discount_id', 'guest_entries_discount_id_foreign')
-                  ->references('id')
-                  ->on('discounts')
-                  ->onDelete('set null');
-            
-            // Add index for discount_mode
-            $table->index('discount_mode', 'idx_discount_mode_entries');
+            // Add index for discount_mode (only if not exists)
+            if (!Schema::hasIndex('guest_entries', 'idx_discount_mode_entries')) {
+                $table->index('discount_mode', 'idx_discount_mode_entries');
+            }
         });
 
         // Update discount_mode enum - Remove 'Direct' from guest_entries
@@ -78,9 +81,11 @@ return new class extends Migration
             COMMENT 'Detail-level discount mode. None: no discount for this group (may inherit entry-level discount). Direct: specific direct discount from discounts table.'
         ");
 
-        // Add index for discount_mode
+        // Add index for discount_mode (only if not exists)
         Schema::table('guest_entry_details', function (Blueprint $table) {
-            $table->index('discount_mode', 'idx_discount_mode_details');
+            if (!Schema::hasIndex('guest_entry_details', 'idx_discount_mode_details')) {
+                $table->index('discount_mode', 'idx_discount_mode_details');
+            }
         });
 
         // Update discount_amount comment

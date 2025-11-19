@@ -9,34 +9,55 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('bookings', function (Blueprint $table) {
-            // Add new fields
-            $table->string('email', 100)->nullable()->after('contact_number');
-            $table->string('id_type', 50)->nullable()->after('email');
-            $table->string('id_number', 50)->nullable()->after('id_type');
+            // Add new fields (only if not exists)
+            if (!Schema::hasColumn('bookings', 'email')) {
+                $table->string('email', 100)->nullable()->after('contact_number');
+            }
+            if (!Schema::hasColumn('bookings', 'id_type')) {
+                $table->string('id_type', 50)->nullable()->after('email');
+            }
+            if (!Schema::hasColumn('bookings', 'id_number')) {
+                $table->string('id_number', 50)->nullable()->after('id_type');
+            }
             
             // Add combined datetime fields (keep old fields for now for backward compatibility)
-            $table->datetime('check_in_datetime')->nullable()->after('check_out_date');
-            $table->datetime('check_out_datetime')->nullable()->after('check_in_datetime');
-            $table->integer('duration_hours')->nullable()->after('check_out_datetime');
+            if (!Schema::hasColumn('bookings', 'check_in_datetime')) {
+                $table->datetime('check_in_datetime')->nullable()->after('check_out_date');
+            }
+            if (!Schema::hasColumn('bookings', 'check_out_datetime')) {
+                $table->datetime('check_out_datetime')->nullable()->after('check_in_datetime');
+            }
+            if (!Schema::hasColumn('bookings', 'duration_hours')) {
+                $table->integer('duration_hours')->nullable()->after('check_out_datetime');
+            }
             
             // Add cancellation fields
-            $table->datetime('cancellation_deadline')->nullable()->after('booking_status')
-                  ->comment('72 hours before check-in');
-            $table->text('cancellation_reason')->nullable()->after('cancelled_at');
-            $table->string('special_requests')->nullable()->after('notes');
+            if (!Schema::hasColumn('bookings', 'cancellation_deadline')) {
+                $table->datetime('cancellation_deadline')->nullable()->after('booking_status')
+                      ->comment('72 hours before check-in');
+            }
+            if (!Schema::hasColumn('bookings', 'cancellation_reason')) {
+                $table->text('cancellation_reason')->nullable()->after('cancelled_at');
+            }
+            if (!Schema::hasColumn('bookings', 'special_requests')) {
+                $table->string('special_requests')->nullable()->after('notes');
+            }
             
             // Add facility subtotal (rename from subtotal to facility_subtotal for clarity)
-            $table->decimal('facility_subtotal', 10, 2)->default(0)->after('booking_status');
+            if (!Schema::hasColumn('bookings', 'facility_subtotal')) {
+                $table->decimal('facility_subtotal', 10, 2)->default(0)->after('booking_status');
+            }
             
-            // Update booking_status enum to include No_Show
-            $table->enum('booking_status', [
-                'Pending', 'Confirmed', 'Checked_In', 'Checked_Out', 'Cancelled', 'No_Show'
-            ])->default('Pending')->change();
-            
-            // Add indexes for new fields
-            $table->index('check_in_datetime');
-            $table->index('check_out_datetime');
-            $table->index('email');
+            // Add indexes for new fields (only if not exists)
+            if (!Schema::hasIndex('bookings', 'bookings_check_in_datetime_index')) {
+                $table->index('check_in_datetime');
+            }
+            if (!Schema::hasIndex('bookings', 'bookings_check_out_datetime_index')) {
+                $table->index('check_out_datetime');
+            }
+            if (!Schema::hasIndex('bookings', 'bookings_email_index')) {
+                $table->index('email');
+            }
         });
         
         // Migrate existing data to new datetime fields

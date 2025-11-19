@@ -28,6 +28,7 @@ class RevenueReportService extends ReportService
             'by_facility' => $this->getRevenueByFacility(),
             'by_payment_method' => $this->getRevenueByPaymentMethod(),
             'by_source' => $this->getRevenueBySource(),
+            'transactions' => $this->getTransactions(),
             'forfeited_downpayments' => $this->getForfeitedDownpayments(),
             'outstanding_balances' => $this->getOutstandingBalances(),
             'comparison' => $this->getComparison(),
@@ -50,6 +51,11 @@ class RevenueReportService extends ReportService
             
             $totalRevenue = $bookingRevenue + $guestEntryRevenue;
 
+            // Get dashboard metrics once
+            $expectedRevenue = $this->getExpectedRevenue();
+            $forfeitedAmount = $this->getForfeitedAmount();
+            $refundedAmount = $this->getRefundedAmount();
+
             return [
                 'total_revenue' => $totalRevenue,
                 'total_revenue_formatted' => $this->formatCurrency($totalRevenue),
@@ -59,8 +65,77 @@ class RevenueReportService extends ReportService
                 'guest_entry_revenue' => $guestEntryRevenue,
                 'guest_entry_revenue_formatted' => $this->formatCurrency($guestEntryRevenue),
                 'guest_entry_percentage' => $totalRevenue > 0 ? ($guestEntryRevenue / $totalRevenue) * 100 : 0,
+                // Dashboard metrics
+                'expected_revenue' => $expectedRevenue['total'],
+                'expected_revenue_formatted' => $expectedRevenue['total_formatted'],
+                'expected_count' => $expectedRevenue['count'],
+                'forfeited_amount' => $forfeitedAmount['total'],
+                'forfeited_amount_formatted' => $forfeitedAmount['total_formatted'],
+                'forfeited_count' => $forfeitedAmount['count'],
+                'refunded_amount' => $refundedAmount['total'],
+                'refunded_amount_formatted' => $refundedAmount['total_formatted'],
+                'refunded_count' => $refundedAmount['count'],
             ];
         });
+    }
+    /**
+     * Get expected revenue from future confirmed bookings
+     */
+    protected function getExpectedRevenue(): array
+    {
+        $today = now()->toDateString();
+        
+        // Query billings for future confirmed bookings with unpaid balance
+        $expected = DB::table('billings')
+            ->join('bookings', function ($join) {
+                $join->on('billings.billable_id', '=', 'bookings.id')
+                     ->where('billings.billable_type', '=', Booking::class);
+            })
+            ->where('bookings.booking_status', 'Confirmed')
+            ->where('bookings.check_in_date', '>', $today)
+            ->whereIn('billings.payment_status', ['unpaid', 'partial'])
+            ->where('billings.billing_status', '!=', 'cancelled')
+            ->whereNull('bookings.deleted_at')
+            ->whereNull('billings.deleted_at')
+            ->select(DB::raw('COUNT(*) as count'), DB::raw('SUM(billings.balance) as total'))
+            ->first();
+
+        return [
+            'total' => $expected->total ?? 0,
+            'total_formatted' => $this->formatCurrency($expected->total ?? 0),
+            'count' => $expected->count ?? 0,
+        ];
+    }
+
+    /**
+     * Get forfeited amount from non-refundable cancellations
+     */
+    protected function getForfeitedAmount(): array
+    {
+        $forfeited = $this->getForfeitedDownpayments();
+
+        return [
+            'total' => $forfeited['total'] ?? 0,
+            'total_formatted' => $this->formatCurrency($forfeited['total'] ?? 0),
+            'count' => $forfeited['count'] ?? 0,
+        ];
+    }
+
+    /**
+     * Get refunded amount (money returned to customers)
+     */
+    protected function getRefundedAmount(): array
+    {
+        $refunded = \App\Models\Billing::where('payment_status', 'refunded')
+            ->whereBetween('updated_at', [$this->dateFrom, $this->dateTo])
+            ->select(\DB::raw('COUNT(*) as count'), \DB::raw('SUM(amount_paid) as total'))
+            ->first();
+
+        return [
+            'total' => $refunded->total ?? 0,
+            'total_formatted' => $this->formatCurrency($refunded->total ?? 0),
+            'count' => $refunded->count ?? 0,
+        ];
     }
 
     /**
@@ -103,11 +178,15 @@ class RevenueReportService extends ReportService
 
     /**
      * Get booking revenue (amount paid from billings)
+     * ✅ FIXED: Use actual_check_out_datetime OR check_out_datetime for completed bookings
      */
     protected function getBookingRevenue(): float
     {
         $bookingIds = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
-            ->whereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo])
+            ->where(function($query) {
+                $query->whereBetween('actual_check_out_datetime', [$this->dateFrom, $this->dateTo])
+                      ->orWhereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo]);
+            })
             ->pluck('id');
 
         return Billing::where('billable_type', Booking::class)
@@ -364,6 +443,85 @@ class RevenueReportService extends ReportService
                 'percentage' => $total > 0 ? ($guestEntryRevenue / $total) * 100 : 0,
             ],
         ];
+    }
+
+    /**
+     * Get detailed transactions list (completed billings)
+     */
+    protected function getTransactions(): array
+    {
+        return $this->getCachedData('transactions', function () {
+            // Get completed billings for bookings
+            $bookingIds = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
+                ->where(function($query) {
+                    $query->whereBetween('actual_check_out_datetime', [$this->dateFrom, $this->dateTo])
+                          ->orWhereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo]);
+                })
+                ->pluck('id');
+
+            $bookingBillings = Billing::where('billable_type', Booking::class)
+                ->whereIn('billable_id', $bookingIds)
+                ->where('billing_status', 'completed')
+                ->with(['billable', 'payments'])
+                ->get();
+
+            // Get completed billings for guest entries
+            $guestEntryIds = GuestEntry::where('is_checked_out', true)
+                ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
+                ->pluck('id');
+
+            $guestEntryBillings = Billing::where('billable_type', GuestEntry::class)
+                ->whereIn('billable_id', $guestEntryIds)
+                ->where('billing_status', 'completed')
+                ->with(['billable', 'payments'])
+                ->get();
+
+            // Merge and format transactions
+            $allBillings = $bookingBillings->concat($guestEntryBillings);
+
+            return $allBillings->map(function ($billing) {
+                $billable = $billing->billable;
+                $transactionType = $billable instanceof Booking ? 'Booking' : 'Walk-in';
+                $reference = $billable instanceof Booking 
+                    ? $billable->booking_reference 
+                    : $billable->entry_reference;
+                
+                // Get checkout datetime
+                $checkoutDate = null;
+                if ($billable instanceof Booking) {
+                    $checkoutDate = $billable->actual_check_out_datetime ?? $billable->check_out_datetime;
+                } else {
+                    $checkoutDate = $billable->checkout_datetime;
+                }
+
+                // Get payment methods used
+                $paymentMethods = $billing->payments->pluck('payment_method')->unique()->map(function($method) {
+                    return ucfirst(str_replace('_', ' ', $method));
+                })->implode(', ');
+
+                return [
+                    'transaction_date' => $checkoutDate?->format('Y-m-d H:i:s'),
+                    'transaction_date_formatted' => $checkoutDate?->format('M d, Y h:i A'),
+                    'billing_number' => $billing->billing_number,
+                    'reference' => $reference,
+                    'transaction_type' => $transactionType,
+                    'guest_name' => $billable->guest_name,
+                    'contact_number' => $billable->contact_number ?? 'N/A',
+                    'total_amount' => $billing->total_amount,
+                    'total_amount_formatted' => $this->formatCurrency($billing->total_amount),
+                    'amount_paid' => $billing->amount_paid,
+                    'amount_paid_formatted' => $this->formatCurrency($billing->amount_paid),
+                    'discount_amount' => $billing->discount_amount,
+                    'discount_amount_formatted' => $this->formatCurrency($billing->discount_amount),
+                    'payment_methods' => $paymentMethods,
+                    'payment_status' => ucfirst($billing->payment_status),
+                    'billing_status' => ucfirst($billing->billing_status),
+                ];
+            })
+            ->sortByDesc('transaction_date')
+            ->values()
+            ->toArray();
+        });
     }
 
     /**
