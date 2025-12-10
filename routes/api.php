@@ -325,7 +325,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{id}/payment', [BillingController::class, 'recordPayment'])
             ->middleware('permission:process-payments');
         
-        // ✅ NEW: Add extension to billing (mid-stay charges)
+        // ✅ NEW: Add bulk extensions to billing (atomic operation)
+        Route::post('/{id}/extensions/bulk', [BillingController::class, 'addBulkExtensions'])
+            ->middleware('permission:manage-bookings');
+        
+        // ✅ Add single extension to billing (mid-stay charges)
         Route::post('/{id}/add-extension', [BillingController::class, 'addExtension'])
             ->middleware('permission:manage-bookings');
         

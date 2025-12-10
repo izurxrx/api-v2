@@ -11,5 +11,5 @@ Artisan::command('inspire', function () {
 // ✅ Schedule: Mark No-Show bookings every hour
 Schedule::command('bookings:mark-no-show')->hourly();
 
-// ✅ Schedule: Mark overdue billings every hour
-Schedule::command('billings:mark-overdue')->hourly();
+// ✅ Schedule: Detect overstaying guests every hour
+Schedule::command('entries:mark-overstaying')->hourly();

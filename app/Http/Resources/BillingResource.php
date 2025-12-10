@@ -127,6 +127,7 @@ class BillingResource extends JsonResource
                     return [
                         'type' => 'Booking',
                         'reference' => $billable->booking_reference,
+                        'booking_type' => $billable->booking_type, // ✅ FIXED: Added booking_type
                         'check_in' => $billable->check_in_datetime?->format('Y-m-d H:i:s'),
                         'check_out' => $billable->check_out_datetime?->format('Y-m-d H:i:s'),
                         'status' => $billable->booking_status,

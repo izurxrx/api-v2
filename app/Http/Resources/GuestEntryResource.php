@@ -47,6 +47,13 @@ class GuestEntryResource extends JsonResource
             // ✅ Payment info now comes from billing relationship only
             'is_checked_out' => (bool) $this->is_checked_out,
             'checkout_datetime' => $this->checkout_datetime?->toIso8601String(),  // ✅ ADD THIS
+            
+            // ✅ Overstay Detection
+            'overstay_status' => $this->getOverstayStatus(),
+            'scheduled_checkout' => $this->getScheduledCheckout(),
+            'is_overstaying' => $this->isOverstaying(),
+            'overstay_minutes' => $this->getOverstayMinutes(),
+            
             'notes' => $this->notes,
             'created_by' => $this->created_by,
             'created_by_user' => $this->whenLoaded('createdBy', function() {
@@ -84,5 +91,102 @@ class GuestEntryResource extends JsonResource
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->diffForHumans(),
         ];
+    }
+
+    /**
+     * Get overstay status for display
+     */
+    private function getOverstayStatus(): ?string
+    {
+        if ($this->is_checked_out) {
+            return null;
+        }
+
+        if ($this->isOverstaying()) {
+            $minutes = $this->getOverstayMinutes();
+            if ($minutes > 60) {
+                $hours = floor($minutes / 60);
+                $mins = $minutes % 60;
+                return $mins > 0 ? "{$hours}h {$mins}m overstaying" : "{$hours}h overstaying";
+            }
+            return "{$minutes}m overstaying";
+        }
+
+        return null;
+    }
+
+    /**
+     * Get scheduled checkout datetime
+     */
+    private function getScheduledCheckout(): ?string
+    {
+        if ($this->is_checked_out) {
+            return null;
+        }
+
+        $gracePeriodMinutes = config('billing.overtime.grace_period_minutes', 15);
+
+        if ($this->entry_type === 'walk_in') {
+            // For walk-ins: get latest facility checkout
+            $latestCheckout = null;
+            if ($this->relationLoaded('facilities')) {
+                foreach ($this->facilities as $facility) {
+                    if ($facility->duration_hours) {
+                        $checkout = $this->check_in_datetime
+                            ->copy()
+                            ->addHours($facility->duration_hours)
+                            ->addMinutes($gracePeriodMinutes);
+                        
+                        if (!$latestCheckout || $checkout->gt($latestCheckout)) {
+                            $latestCheckout = $checkout;
+                        }
+                    }
+                }
+            }
+            return $latestCheckout?->toIso8601String();
+        }
+
+        if ($this->booking) {
+            return $this->booking->check_out_datetime
+                ->copy()
+                ->addMinutes($gracePeriodMinutes)
+                ->toIso8601String();
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if guest is currently overstaying
+     */
+    private function isOverstaying(): bool
+    {
+        if ($this->is_checked_out) {
+            return false;
+        }
+
+        $scheduledCheckout = $this->getScheduledCheckout();
+        if (!$scheduledCheckout) {
+            return false;
+        }
+
+        return now()->gt(\Carbon\Carbon::parse($scheduledCheckout));
+    }
+
+    /**
+     * Get overstay minutes
+     */
+    private function getOverstayMinutes(): int
+    {
+        if (!$this->isOverstaying()) {
+            return 0;
+        }
+
+        $scheduledCheckout = $this->getScheduledCheckout();
+        if (!$scheduledCheckout) {
+            return 0;
+        }
+
+        return now()->diffInMinutes(\Carbon\Carbon::parse($scheduledCheckout));
     }
 }

@@ -3,7 +3,8 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
-use App\Models\Billing;
+use App\Models\GuestEntry;
+use App\Models\Booking;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
@@ -14,14 +15,14 @@ class MarkOverdueBillings extends Command
      *
      * @var string
      */
-    protected $signature = 'billings:mark-overdue';
+    protected $signature = 'entries:mark-overstaying';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Mark unpaid/partial billings as overdue when past their due date';
+    protected $description = 'Detect guests who exceeded their checkout time (overstaying)';
 
     /**
      * Execute the console command.
@@ -29,46 +30,70 @@ class MarkOverdueBillings extends Command
     public function handle()
     {
         $now = Carbon::now();
+        $gracePeriodMinutes = config('billing.overtime.grace_period_minutes', 15);
+        
+        $overstayingCount = 0;
 
-        // Find billings that are past due date and not fully paid
-        $overdueBillings = Billing::whereNotNull('due_date')
-            ->where('due_date', '<', $now)
-            ->whereIn('payment_status', ['pending', 'partial'])
+        // ========================================
+        // 1. Check Guest Entries (Walk-in & Booking Check-ins)
+        // ========================================
+        $activeEntries = GuestEntry::where('is_checked_out', false)
+            ->with(['facilities.rate', 'booking'])
             ->get();
 
-        $count = 0;
+        foreach ($activeEntries as $entry) {
+            $isOverstaying = false;
+            $scheduledCheckout = null;
 
-        foreach ($overdueBillings as $billing) {
-            // Update payment status to overdue
-            $billing->update([
-                'payment_status' => 'overdue',
-            ]);
+            // Determine scheduled checkout based on entry type
+            if ($entry->entry_type === 'walk_in') {
+                // For walk-ins: calculate from check-in + facility duration
+                foreach ($entry->facilities as $facility) {
+                    if ($facility->duration_hours) {
+                        $facilityCheckout = $entry->check_in_datetime
+                            ->copy()
+                            ->addHours($facility->duration_hours)
+                            ->addMinutes($gracePeriodMinutes);
 
-            // Get billable info for logging
-            $billableType = class_basename($billing->billable_type);
-            $billableId = $billing->billable_id;
-            $reference = $billing->billable?->booking_reference ??
-                        ($billing->billable?->entry_reference ?? 'N/A');
+                        if ($now->gt($facilityCheckout)) {
+                            $isOverstaying = true;
+                            $scheduledCheckout = $facilityCheckout;
+                            break;
+                        }
+                    }
+                }
+            } elseif ($entry->booking) {
+                // For booking check-ins: use booking's checkout datetime
+                $scheduledCheckout = $entry->booking->check_out_datetime
+                    ->copy()
+                    ->addMinutes($gracePeriodMinutes);
 
-            Log::info('Billing marked as overdue', [
-                'billing_id' => $billing->id,
-                'billable_type' => $billableType,
-                'billable_id' => $billableId,
-                'reference' => $reference,
-                'due_date' => $billing->due_date,
-                'total_amount' => $billing->total_amount,
-                'balance' => $billing->balance,
-                'marked_at' => $now,
-            ]);
+                if ($now->gt($scheduledCheckout)) {
+                    $isOverstaying = true;
+                }
+            }
 
-            $this->info("✓ Billing #{$billing->id} ({$billableType} {$reference}) marked as overdue");
-            $count++;
+            // Log overstaying guests
+            if ($isOverstaying) {
+                Log::warning('Guest overstaying detected', [
+                    'entry_id' => $entry->id,
+                    'entry_reference' => $entry->entry_reference,
+                    'entry_type' => $entry->entry_type,
+                    'guest_name' => $entry->guest_name,
+                    'scheduled_checkout' => $scheduledCheckout?->toDateTimeString(),
+                    'current_time' => $now->toDateTimeString(),
+                    'minutes_over' => $scheduledCheckout ? $now->diffInMinutes($scheduledCheckout) : null,
+                ]);
+
+                $this->warn("⚠ {$entry->entry_reference} ({$entry->guest_name}) - Overstaying since {$scheduledCheckout?->format('M d, Y h:i A')}");
+                $overstayingCount++;
+            }
         }
 
-        $this->info("Completed: {$count} billing(s) marked as overdue");
+        $this->info("Completed: {$overstayingCount} guest(s) currently overstaying");
 
-        Log::info('Overdue billing check completed', [
-            'billings_marked' => $count,
+        Log::info('Overstay check completed', [
+            'overstaying_count' => $overstayingCount,
             'checked_at' => $now,
         ]);
 

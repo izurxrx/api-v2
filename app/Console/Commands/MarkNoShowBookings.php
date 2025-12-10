@@ -21,7 +21,7 @@ class MarkNoShowBookings extends Command
      *
      * @var string
      */
-    protected $description = 'Mark confirmed bookings as No-Show if guest did not check-in within grace period';
+    protected $description = 'Auto-mark bookings: Pending→No-Show (no payment), Confirmed→Cancelled (missed check-in)';
 
     /**
      * Execute the console command.
@@ -31,17 +31,46 @@ class MarkNoShowBookings extends Command
         $gracePeriodHours = 4; // 4 hours after scheduled check-in
         $cutoffTime = Carbon::now()->subHours($gracePeriodHours);
         
-        $noShowBookings = Booking::where('booking_status', 'Confirmed')
+        $pendingCount = 0;
+        $confirmedCount = 0;
+        
+        // 1. Mark PENDING bookings as No-Show (no downpayment paid)
+        $pendingBookings = Booking::where('booking_status', 'Pending')
             ->where('check_in_datetime', '<', $cutoffTime)
             ->get();
         
-        $count = 0;
-        
-        foreach ($noShowBookings as $booking) {
+        foreach ($pendingBookings as $booking) {
             $booking->update([
                 'booking_status' => 'No_Show',
                 'notes' => sprintf(
-                    '%s | Auto-marked as No-Show on %s. Guest did not check-in within %d hours of scheduled time (%s).',
+                    '%s | Auto-marked as No-Show on %s. Guest did not pay downpayment and missed check-in time (%s).',
+                    $booking->notes ?? '',
+                    now()->format('M d, Y h:i A'),
+                    $booking->check_in_datetime->format('M d, Y h:i A')
+                ),
+            ]);
+            
+            Log::info('Pending booking marked as No-Show (no payment)', [
+                'booking_id' => $booking->id,
+                'booking_reference' => $booking->booking_reference,
+                'scheduled_check_in' => $booking->check_in_datetime,
+                'marked_at' => now(),
+            ]);
+            
+            $this->info("✓ Marked pending booking {$booking->booking_reference} as No-Show (no payment)");
+            $pendingCount++;
+        }
+        
+        // 2. Mark CONFIRMED bookings as Cancelled (paid but didn't show up)
+        $confirmedBookings = Booking::where('booking_status', 'Confirmed')
+            ->where('check_in_datetime', '<', $cutoffTime)
+            ->get();
+        
+        foreach ($confirmedBookings as $booking) {
+            $booking->update([
+                'booking_status' => 'Cancelled',
+                'notes' => sprintf(
+                    '%s | Auto-cancelled on %s. Guest paid downpayment but did not check-in within %d hours of scheduled time (%s).',
                     $booking->notes ?? '',
                     now()->format('M d, Y h:i A'),
                     $gracePeriodHours,
@@ -49,21 +78,22 @@ class MarkNoShowBookings extends Command
                 ),
             ]);
             
-            Log::info('Booking marked as No-Show', [
+            Log::info('Confirmed booking auto-cancelled (paid but no-show)', [
                 'booking_id' => $booking->id,
                 'booking_reference' => $booking->booking_reference,
                 'scheduled_check_in' => $booking->check_in_datetime,
                 'marked_at' => now(),
             ]);
             
-            $this->info("✓ Marked booking {$booking->booking_reference} as No-Show");
-            $count++;
+            $this->info("✓ Cancelled confirmed booking {$booking->booking_reference} (paid downpayment, no check-in)");
+            $confirmedCount++;
         }
         
-        $this->info("Completed: {$count} booking(s) marked as No-Show");
+        $this->info("Completed: {$pendingCount} No-Show, {$confirmedCount} Cancelled");
         
-        Log::info('No-Show check completed', [
-            'bookings_marked' => $count,
+        Log::info('Booking auto-processing completed', [
+            'pending_marked_no_show' => $pendingCount,
+            'confirmed_cancelled' => $confirmedCount,
             'cutoff_time' => $cutoffTime,
         ]);
         

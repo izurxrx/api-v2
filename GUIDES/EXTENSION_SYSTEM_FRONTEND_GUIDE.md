@@ -15,6 +15,7 @@ The extension system allows adding charges to existing guest entries and booking
 - ✅ Auto-fetches per-guest rates from metadata
 - ✅ Optional payment recording
 - ✅ Real-time billing total updates
+- ✅ **Bulk endpoint** for atomic multi-extension submission
 
 ---
 
@@ -22,7 +23,9 @@ The extension system allows adding charges to existing guest entries and booking
 
 **Required:** Bearer Token (Staff/Manager/Admin)
 
-**Endpoint:** `POST /api/billings/{billing_id}/extensions`
+**Endpoints:**
+- Single extension: `POST /api/billings/{billing_id}/add-extension`
+- **Bulk extensions: `POST /api/billings/{billing_id}/extensions/bulk`** (Recommended)
 
 ---
 
@@ -56,6 +59,185 @@ Before showing extension options, check the `extension_restrictions` from the bi
 ---
 
 ## 📋 API Request Structure
+
+### Smart Mode (Facilities, Guests, Services)
+
+```json
+{
+  "facilities": [
+    {
+      "facility_id": 5,
+      "rate_id": 12,
+      "quantity": 2,
+      "hours": 4
+    }
+  ],
+  "guest_charges": [
+    {
+      "guest_type": "Adult",
+      "count": 2,
+      "rate_per_guest": 150.00
+    },
+    {
+      "guest_type": "Child",
+      "count": 1,
+      "rate_per_guest": 100.00
+    }
+  ],
+  "third_party_services": [
+    {
+      "service_name": "Massage Therapy",
+      "amount": 500.00
+    }
+  ],
+  "amount_paid": 1000.00,
+  "payment_method": "Cash"
+}
+```
+
+**Field Notes:**
+- `facilities[].hours`: Optional for walk-ins (auto-inherited from original entry)
+- `guest_charges[].rate_per_guest`: Optional (auto-fetched from billing metadata)
+- `amount_paid`: Optional payment to record
+- `payment_method`: Required if `amount_paid > 0`
+
+### Simple Mode (Damage/Custom Charges)
+
+```json
+{
+  "simple_mode": true,
+  "amount": 250.00,
+  "quantity": 1,
+  "amount_paid": 250.00,
+  "payment_method": "Cash"
+}
+```
+
+---
+
+## 🚀 Bulk Extensions Endpoint (Recommended)
+
+### Why Use Bulk?
+
+**Performance:** 1 API call instead of N sequential calls  
+**Atomicity:** All extensions succeed or all fail (no partial states)  
+**Efficiency:** Single database transaction  
+**Simplicity:** Cleaner error handling
+
+### Bulk Request Format
+
+**Endpoint:** `POST /api/billings/{billing_id}/extensions/bulk`
+
+```json
+{
+  "extensions": [
+    {
+      "facilities": [
+        {
+          "facility_id": 5,
+          "rate_id": 12,
+          "quantity": 2,
+          "hours": 4
+        }
+      ]
+    },
+    {
+      "guest_charges": [
+        {
+          "guest_type": "adult",
+          "count": 2,
+          "rate_per_guest": 150.00
+        }
+      ]
+    },
+    {
+      "third_party_services": [
+        {
+          "service_name": "Massage Therapy",
+          "amount": 500.00
+        }
+      ]
+    },
+    {
+      "simple_mode": true,
+      "amount": 250.00,
+      "quantity": 1
+    }
+  ],
+  "amount_paid": 1000.00,
+  "payment_method": "Cash",
+  "payment_notes": "Payment for 4 extensions"
+}
+```
+
+**Limits:**
+- Maximum 20 extensions per request
+- Maximum 10 facilities per extension
+- Maximum 10 guest charges per extension
+- Maximum 10 services per extension
+
+### Bulk Success Response (200)
+
+```json
+{
+  "message": "4 extension(s) added successfully",
+  "success": true,
+  "data": {
+    "billing": {
+      "id": 123,
+      "billing_number": "BL-20251209-001",
+      "total_amount": "8400.00",
+      "balance": "7400.00",
+      "payment_status": "partial"
+    },
+    "extensions": [
+      {
+        "id": 45,
+        "extension_type": "facility",
+        "total_amount": "2400.00"
+      },
+      {
+        "id": 46,
+        "extension_type": "guest",
+        "total_amount": "300.00"
+      },
+      {
+        "id": 47,
+        "extension_type": "service",
+        "total_amount": "500.00"
+      },
+      {
+        "id": 48,
+        "extension_type": "damage",
+        "total_amount": "250.00"
+      }
+    ],
+    "extension_summary": {
+      "total_extension_amount": "3450.00",
+      "extensions_count": 4,
+      "detailed_calculations": [...]
+    },
+    "payment": {
+      "id": 78,
+      "amount": "1000.00",
+      "payment_method": "Cash"
+    }
+  }
+}
+```
+
+### Bulk Error Response (400)
+
+```json
+{
+  "message": "Extension #1: Cannot add facilities to Swimming bookings.",
+  "success": false
+}
+```
+
+---
+
+## 📋 Single Extension API (Legacy/Fallback)
 
 ### Smart Mode (Facilities, Guests, Services)
 
@@ -499,7 +681,358 @@ export default AddExtensionForm;
 
 ---
 
-## 🎯 Simple Mode (Damage Charges)
+## 🚀 Bulk Extensions Implementation (Recommended)
+
+### React/TypeScript - Bulk Submission
+
+```typescript
+import { useState } from 'react';
+import axios from 'axios';
+
+interface BulkExtensionItem {
+  facilities?: FacilityExtension[];
+  guest_charges?: GuestCharge[];
+  third_party_services?: Service[];
+  simple_mode?: boolean;
+  amount?: number;
+  quantity?: number;
+}
+
+const BulkExtensionForm = ({ billing }: { billing: Billing }) => {
+  const [extensionsList, setExtensionsList] = useState<BulkExtensionItem[]>([]);
+  const [amountPaid, setAmountPaid] = useState<number>(0);
+  const [paymentMethod, setPaymentMethod] = useState<string>('Cash');
+  const [paymentNotes, setPaymentNotes] = useState<string>('');
+  const [loading, setLoading] = useState(false);
+
+  const addExtensionItem = () => {
+    setExtensionsList([...extensionsList, {}]);
+  };
+
+  const removeExtensionItem = (index: number) => {
+    setExtensionsList(extensionsList.filter((_, i) => i !== index));
+  };
+
+  const handleSubmitBulk = async () => {
+    if (extensionsList.length === 0) {
+      alert('Please add at least one extension');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const payload = {
+        extensions: extensionsList,
+        amount_paid: amountPaid > 0 ? amountPaid : undefined,
+        payment_method: amountPaid > 0 ? paymentMethod : undefined,
+        payment_notes: amountPaid > 0 ? paymentNotes : undefined,
+      };
+
+      const response = await axios.post(
+        `/api/billings/${billing.id}/extensions/bulk`,
+        payload
+      );
+
+      alert(`✅ ${response.data.data.extension_summary.extensions_count} extension(s) added successfully!`);
+      console.log('Updated billing:', response.data.data.billing);
+      
+      // Reset form
+      setExtensionsList([]);
+      setAmountPaid(0);
+      window.location.reload();
+    } catch (error: any) {
+      if (error.response?.status === 400) {
+        alert(`❌ ${error.response.data.message}`);
+      } else if (error.response?.status === 422) {
+        const errors = error.response.data.errors;
+        alert('Validation errors:\n' + JSON.stringify(errors, null, 2));
+      } else {
+        alert('Failed to add extensions');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const calculateGrandTotal = () => {
+    let total = 0;
+    extensionsList.forEach(ext => {
+      // Calculate based on extension type
+      if (ext.facilities) {
+        ext.facilities.forEach(f => {
+          total += (f.amount || 0) * (f.quantity || 1) * (f.hours || 1);
+        });
+      }
+      if (ext.guest_charges) {
+        ext.guest_charges.forEach(g => {
+          total += (g.rate_per_guest || 0) * (g.count || 0);
+        });
+      }
+      if (ext.third_party_services) {
+        ext.third_party_services.forEach(s => {
+          total += s.amount || 0;
+        });
+      }
+      if (ext.simple_mode && ext.amount) {
+        total += ext.amount * (ext.quantity || 1);
+      }
+    });
+    return total;
+  };
+
+  return (
+    <div className="bulk-extension-form">
+      <h2>Add Multiple Extensions (Bulk)</h2>
+      <p>Current Balance: ₱{billing.balance}</p>
+
+      <div className="extensions-list">
+        {extensionsList.map((ext, index) => (
+          <div key={index} className="extension-item">
+            <h4>Extension #{index + 1}</h4>
+            {/* Render extension fields based on type */}
+            {/* Similar to single extension form but nested */}
+            <button onClick={() => removeExtensionItem(index)}>Remove</button>
+          </div>
+        ))}
+      </div>
+
+      <button onClick={addExtensionItem}>+ Add Extension</button>
+
+      <div className="summary">
+        <h3>Summary</h3>
+        <p>Total Extensions: {extensionsList.length}</p>
+        <p>Total Amount: ₱{calculateGrandTotal().toFixed(2)}</p>
+      </div>
+
+      {/* Payment Section */}
+      <div className="payment-section">
+        <h3>Payment (Optional)</h3>
+        <input
+          type="number"
+          placeholder="Amount paid"
+          value={amountPaid}
+          onChange={(e) => setAmountPaid(Number(e.target.value))}
+        />
+        {amountPaid > 0 && (
+          <>
+            <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+              <option>Cash</option>
+              <option>GCash</option>
+              <option>Bank Transfer</option>
+            </select>
+            <input
+              type="text"
+              placeholder="Payment notes"
+              value={paymentNotes}
+              onChange={(e) => setPaymentNotes(e.target.value)}
+            />
+          </>
+        )}
+      </div>
+
+      <button onClick={handleSubmitBulk} disabled={loading || extensionsList.length === 0}>
+        {loading ? 'Submitting...' : `Submit ${extensionsList.length} Extension(s)`}
+      </button>
+    </div>
+  );
+};
+
+export default BulkExtensionForm;
+```
+
+### Service Method for Bulk
+
+```typescript
+// billing.service.ts
+addBulkExtensions(billingId: number, data: any): Observable<any> {
+  return this.http.post(`${API_URL}/billings/${billingId}/extensions/bulk`, data);
+}
+```
+
+---
+
+## 📊 Migration from Sequential to Bulk
+
+### Before (Sequential - Slower)
+
+```typescript
+async submitExtensionsSequentially() {
+  for (const extension of this.extensionsList) {
+    try {
+      await this.billingService.addExtension(billingId, extension).toPromise();
+    } catch (error) {
+      // Handle partial failure - some succeed, some fail
+      console.error('Extension failed:', error);
+    }
+  }
+  
+  // Record payment separately
+  if (paymentAmount > 0) {
+    await this.billingService.recordPayment(billingId, paymentData).toPromise();
+  }
+}
+```
+
+### After (Bulk - Faster & Atomic)
+
+```typescript
+async submitExtensionsBulk() {
+  const payload = {
+    extensions: this.extensionsList,
+    amount_paid: this.paymentAmount,
+    payment_method: this.paymentMethod
+  };
+  
+  try {
+    const result = await this.billingService.addBulkExtensions(billingId, payload).toPromise();
+    // All succeed or all fail - no partial states!
+    console.log('All extensions added:', result);
+  } catch (error) {
+    // Clean error - nothing was changed
+    console.error('All extensions rolled back:', error);
+  }
+}
+```
+
+---
+
+## 📋 Single Extension Form (Original)
+
+### React/TypeScript - Single Extension
+
+```typescript
+import { useState } from 'react';
+import axios from 'axios';
+
+interface ExtensionRestrictions {
+  can_add_facilities: boolean;
+  can_add_guests: boolean;
+  can_add_services: boolean;
+  can_add_overtime: boolean;
+  entry_type: string;
+  booking_type?: string;
+}
+
+interface Billing {
+  id: number;
+  total_amount: string;
+  balance: string;
+  extension_restrictions: ExtensionRestrictions;
+  per_guest_rates?: Record<string, number>;
+}
+
+interface FacilityExtension {
+  facility_id: number;
+  rate_id: number;
+  quantity: number;
+  hours?: number;
+}
+
+interface GuestCharge {
+  guest_type: string;
+  count: number;
+  rate_per_guest?: number;
+}
+
+interface Service {
+  service_name: string;
+  amount: number;
+}
+
+const AddExtensionForm = ({ billing }: { billing: Billing }) => {
+  const [facilities, setFacilities] = useState<FacilityExtension[]>([]);
+  const [guests, setGuests] = useState<GuestCharge[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+  const [amountPaid, setAmountPaid] = useState<number>(0);
+  const [paymentMethod, setPaymentMethod] = useState<string>('Cash');
+  const [loading, setLoading] = useState(false);
+
+  const restrictions = billing.extension_restrictions;
+
+  const handleAddExtension = async () => {
+    setLoading(true);
+    try {
+      const payload = {
+        facilities: restrictions.can_add_facilities ? facilities : undefined,
+        guest_charges: restrictions.can_add_guests ? guests : undefined,
+        third_party_services: restrictions.can_add_services ? services : undefined,
+        amount_paid: amountPaid,
+        payment_method: amountPaid > 0 ? paymentMethod : undefined,
+      };
+
+      const response = await axios.post(
+        `/api/billings/${billing.id}/extensions`,
+        payload
+      );
+
+      alert('Extension added successfully!');
+      console.log('Updated billing:', response.data.data.billing);
+      
+      // Reset form or redirect
+      window.location.reload();
+    } catch (error: any) {
+      if (error.response?.status === 400) {
+        alert(error.response.data.message);
+      } else if (error.response?.status === 422) {
+        alert('Validation error: ' + JSON.stringify(error.response.data.errors));
+      } else {
+        alert('Failed to add extension');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addFacility = () => {
+    setFacilities([...facilities, { facility_id: 0, rate_id: 0, quantity: 1 }]);
+  };
+
+  const addGuest = () => {
+    setGuests([...guests, { guest_type: 'Adult', count: 1 }]);
+  };
+
+  const addService = () => {
+    setServices([...services, { service_name: '', amount: 0 }]);
+  };
+
+  return (
+    <div className="extension-form">
+      <h2>Add Extension to Billing #{billing.id}</h2>
+      <p>Current Balance: ₱{billing.balance}</p>
+
+      {/* Facility Extensions */}
+      {restrictions.can_add_facilities && (
+        <div className="section">
+          <h3>Facilities</h3>
+          {facilities.map((facility, index) => (
+            <div key={index} className="facility-row">
+              <select
+                value={facility.facility_id}
+                onChange={(e) => {
+                  const updated = [...facilities];
+                  updated[index].facility_id = Number(e.target.value);
+                  setFacilities(updated);
+                }}
+              >
+                <option value={0}>Select Facility</option>
+                {/* Load from API */}
+              </select>
+              
+              <input
+                type="number"
+                placeholder="Quantity"
+                min={1}
+                value={facility.quantity}
+                onChange={(e) => {
+                  const updated = [...facilities];
+                  updated[index].quantity = Number(e.target.value);
+                  setFacilities(updated);
+                }}
+              />
+
+              {restrictions.entry_type !== 'walk_in' && (
+                <input
+                  type="number"
 
 For quick damage/custom charges without itemization:
 

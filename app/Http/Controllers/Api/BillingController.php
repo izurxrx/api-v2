@@ -410,6 +410,283 @@ class BillingController extends Controller
     }
 
     /**
+     * Add multiple extensions to a billing (bulk endpoint)
+     * Atomic transaction - all succeed or all fail
+     * Entry type restrictions enforced per extension
+     * Optional payment recording after all extensions
+     */
+    public function addBulkExtensions(\App\Http\Requests\Billing\AddBulkExtensionRequest $request, $id)
+    {
+        $billing = Billing::with('billable')->findOrFail($id);
+        
+        return DB::transaction(function () use ($billing, $request) {
+            try {
+                $allExtensions = [];
+                $allCalculations = [];
+                $grandTotal = 0;
+
+                // Process each extension in the array
+                foreach ($request->extensions as $extensionIndex => $extensionData) {
+                    $extensionTotal = 0;
+                    $extensions = [];
+                    $calculations = [];
+
+                    // Get billable entity
+                    $billable = $billing->billable;
+                    if (!$billable) {
+                        return response()->json([
+                            'message' => 'Billable entity not found for this billing.',
+                            'success' => false,
+                        ], 404);
+                    }
+
+                    // Determine entry type
+                    $entryType = $billing->getEntryType();
+                    $isWalkIn = $entryType === 'walk_in';
+                    $isBooking = $entryType === 'booking';
+                    $bookingType = null;
+
+                    if ($isBooking && $billable instanceof \App\Models\Booking) {
+                        $bookingType = $billable->booking_type;
+                    }
+
+                    // === STEP 1: Validate entry type restrictions ===
+                    if (!empty($extensionData['facilities'])) {
+                        if ($isBooking && $bookingType === 'Swimming') {
+                            return response()->json([
+                                'message' => "Extension #{$extensionIndex}: Cannot add facilities to Swimming bookings.",
+                                'success' => false,
+                            ], 400);
+                        }
+                    }
+
+                    if (!empty($extensionData['guest_charges'])) {
+                        if ($isBooking && $bookingType === 'Package') {
+                            return response()->json([
+                                'message' => "Extension #{$extensionIndex}: Cannot add guests to Package bookings.",
+                                'success' => false,
+                            ], 400);
+                        }
+                    }
+
+                    // === STEP 2: Process facilities ===
+                    if (!empty($extensionData['facilities'])) {
+                        foreach ($extensionData['facilities'] as $facilityExtension) {
+                            $facility = \App\Models\Facility::findOrFail($facilityExtension['facility_id']);
+                            $rate = \App\Models\Rate::findOrFail($facilityExtension['rate_id']);
+
+                            $hours = $facilityExtension['hours'] ?? 1;
+                            if ($isWalkIn && $billable instanceof \App\Models\GuestEntry) {
+                                $hours = $billable->number_of_hours ?? 1;
+                            }
+
+                            $amount = $rate->base_price;
+                            $quantity = $facilityExtension['quantity'] ?? 1;
+                            $subtotal = $amount * $hours * $quantity;
+
+                            $extension = BillingExtension::create([
+                                'billing_id' => $billing->id,
+                                'extension_type' => 'facility',
+                                'amount' => $amount,
+                                'quantity' => $quantity,
+                                'hours' => $hours,
+                                'total_amount' => $subtotal,
+                                'metadata' => [
+                                    'facility_id' => $facility->id,
+                                    'facility_name' => $facility->facility_name,
+                                    'rate_id' => $rate->id,
+                                    'rate_type' => $rate->rate_type,
+                                ],
+                            ]);
+
+                            $extensionTotal += $subtotal;
+                            $extensions[] = $extension;
+
+                            $calculations[] = [
+                                'type' => 'facility',
+                                'facility' => $facility->facility_name,
+                                'rate' => $rate->rate_type,
+                                'amount' => $amount,
+                                'hours' => $hours,
+                                'quantity' => $quantity,
+                                'subtotal' => $subtotal,
+                            ];
+                        }
+                    }
+
+                    // === STEP 3: Process guest charges ===
+                    if (!empty($extensionData['guest_charges'])) {
+                        $perGuestRates = $billing->getPerGuestRates() ?? [];
+
+                        foreach ($extensionData['guest_charges'] as $guestCharge) {
+                            $guestType = $guestCharge['guest_type'];
+                            $count = $guestCharge['count'];
+
+                            $ratePerGuest = $guestCharge['rate_per_guest'] ?? null;
+                            if (!$ratePerGuest) {
+                                $guestTypeLower = strtolower($guestType);
+                                $ratePerGuest = $perGuestRates[$guestTypeLower] ?? 0;
+
+                                if (!$ratePerGuest) {
+                                    return response()->json([
+                                        'message' => "Extension #{$extensionIndex}: Rate not found for guest type: {$guestType}. Please provide rate_per_guest.",
+                                        'success' => false,
+                                    ], 400);
+                                }
+                            }
+
+                            $subtotal = $ratePerGuest * $count;
+
+                            $extension = BillingExtension::create([
+                                'billing_id' => $billing->id,
+                                'extension_type' => 'guest',
+                                'amount' => $ratePerGuest,
+                                'quantity' => $count,
+                                'total_amount' => $subtotal,
+                                'metadata' => [
+                                    'guest_type' => $guestType,
+                                ],
+                            ]);
+
+                            $extensionTotal += $subtotal;
+                            $extensions[] = $extension;
+
+                            $calculations[] = [
+                                'type' => 'guest',
+                                'guest_type' => $guestType,
+                                'rate_per_guest' => $ratePerGuest,
+                                'count' => $count,
+                                'subtotal' => $subtotal,
+                            ];
+                        }
+                    }
+
+                    // === STEP 4: Process third-party services ===
+                    if (!empty($extensionData['third_party_services'])) {
+                        foreach ($extensionData['third_party_services'] as $service) {
+                            $amount = $service['amount'];
+                            $serviceName = $service['service_name'];
+
+                            $extension = BillingExtension::create([
+                                'billing_id' => $billing->id,
+                                'extension_type' => 'service',
+                                'amount' => $amount,
+                                'quantity' => 1,
+                                'total_amount' => $amount,
+                                'metadata' => [
+                                    'service_name' => $serviceName,
+                                ],
+                            ]);
+
+                            $extensionTotal += $amount;
+                            $extensions[] = $extension;
+
+                            $calculations[] = [
+                                'type' => 'service',
+                                'service_name' => $serviceName,
+                                'amount' => $amount,
+                            ];
+                        }
+                    }
+
+                    // === STEP 5: Process simple mode ===
+                    if (!empty($extensionData['simple_mode']) && isset($extensionData['amount'])) {
+                        $amount = $extensionData['amount'];
+                        $quantity = $extensionData['quantity'] ?? 1;
+                        $subtotal = $amount * $quantity;
+
+                        $extension = BillingExtension::create([
+                            'billing_id' => $billing->id,
+                            'extension_type' => 'damage',
+                            'amount' => $amount,
+                            'quantity' => $quantity,
+                            'total_amount' => $subtotal,
+                            'metadata' => [],
+                        ]);
+
+                        $extensionTotal += $subtotal;
+                        $extensions[] = $extension;
+
+                        $calculations[] = [
+                            'type' => 'damage',
+                            'amount' => $amount,
+                            'quantity' => $quantity,
+                            'subtotal' => $subtotal,
+                        ];
+                    }
+
+                    $grandTotal += $extensionTotal;
+                    $allExtensions = array_merge($allExtensions, $extensions);
+                    $allCalculations = array_merge($allCalculations, $calculations);
+                }
+
+                // === STEP 6: Update billing totals ===
+                $billing->subtotal += $grandTotal;
+                $billing->total_amount += $grandTotal;
+                $billing->balance += $grandTotal;
+                $billing->save();
+
+                // === STEP 7: Record optional payment ===
+                $payment = null;
+                if ($request->amount_paid > 0) {
+                    $payment = \App\Models\Payment::create([
+                        'billing_id' => $billing->id,
+                        'amount' => $request->amount_paid,
+                        'payment_method' => $request->payment_method,
+                        'payment_date' => now(),
+                        'notes' => $request->payment_notes ?? 'Payment for ' . count($allExtensions) . ' extension(s)',
+                        'received_by' => auth()->id(),
+                        'is_verified' => true,
+                    ]);
+
+                    $billing->amount_paid += $request->amount_paid;
+                    $billing->balance -= $request->amount_paid;
+
+                    if ($billing->balance <= 0) {
+                        $billing->payment_status = 'paid';
+                    } else {
+                        $billing->payment_status = 'partial';
+                    }
+
+                    $billing->save();
+                }
+
+                // === STEP 8: Log and return ===
+                Log::info('Bulk extensions added to billing', [
+                    'billing_id' => $billing->id,
+                    'extensions_count' => count($allExtensions),
+                    'total_amount' => $grandTotal,
+                    'payment_amount' => $request->amount_paid ?? 0,
+                    'detailed_calculations' => $allCalculations,
+                ]);
+
+                return response()->json([
+                    'message' => count($allExtensions) . ' extension(s) added successfully',
+                    'success' => true,
+                    'data' => [
+                        'billing' => new \App\Http\Resources\BillingResource($billing->fresh(['extensions', 'payments'])),
+                        'extensions' => $allExtensions,
+                        'extension_summary' => [
+                            'total_extension_amount' => $grandTotal,
+                            'extensions_count' => count($allExtensions),
+                            'detailed_calculations' => $allCalculations,
+                        ],
+                        'payment' => $payment,
+                    ],
+                ], 200);
+            } catch (\Exception $e) {
+                Log::error('Error adding bulk extensions to billing', [
+                    'billing_id' => $billing->id,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+                
+                throw $e;
+            }
+        });
+    }
+
+    /**
      * Add extension to a billing
      * Simplified version - NO discount logic (discounts only at creation)
      * Entry type restrictions enforced (walk_in, booking:Swimming, booking:Package)
