@@ -179,9 +179,15 @@ class RevenueReportService extends ReportService
     /**
      * Get booking revenue (amount paid from billings)
      * ✅ FIXED: Use actual_check_out_datetime OR check_out_datetime for completed bookings
+     * ✅ FILTER: By entry_type if specified
      */
     protected function getBookingRevenue(): float
     {
+        // Skip if entry_type filter is set to walk_in
+        if (!empty($this->filters['entry_type']) && $this->filters['entry_type'] === 'walk_in') {
+            return 0;
+        }
+
         $bookingIds = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
             ->where(function($query) {
                 $query->whereBetween('actual_check_out_datetime', [$this->dateFrom, $this->dateTo])
@@ -197,9 +203,15 @@ class RevenueReportService extends ReportService
 
     /**
      * Get guest entry revenue (amount paid from billings)
+     * ✅ FILTER: By entry_type if specified
      */
     protected function getGuestEntryRevenue(): float
     {
+        // Skip if entry_type filter is set to booking
+        if (!empty($this->filters['entry_type']) && $this->filters['entry_type'] === 'booking') {
+            return 0;
+        }
+
         $guestEntryIds = GuestEntry::where('is_checked_out', true)
             ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
             ->pluck('id');
@@ -212,9 +224,15 @@ class RevenueReportService extends ReportService
 
     /**
      * Get entrance fees (from guest entries only)
+     * ✅ FILTER: By entry_type (only for walk_in entries)
      */
     protected function getEntranceFees(): float
     {
+        // Skip if entry_type filter is set to booking
+        if (!empty($this->filters['entry_type']) && $this->filters['entry_type'] === 'booking') {
+            return 0;
+        }
+
         return GuestEntry::where('is_checked_out', true)
             ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
             ->sum('entrance_subtotal');
@@ -222,57 +240,90 @@ class RevenueReportService extends ReportService
 
     /**
      * Get facility rentals (from both bookings and guest entries)
+     * ✅ FILTER: By entry_type if specified
      */
     protected function getFacilityRentals(): float
     {
-        $bookingFacilities = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
-            ->whereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo])
-            ->sum('facility_subtotal');
+        $total = 0;
 
-        $guestEntryFacilities = GuestEntry::where('is_checked_out', true)
-            ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
-            ->sum('facility_subtotal');
+        // Add booking facilities unless entry_type is walk_in
+        if (empty($this->filters['entry_type']) || $this->filters['entry_type'] === 'booking') {
+            $bookingFacilities = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
+                ->whereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo])
+                ->sum('facility_subtotal');
+            $total += $bookingFacilities;
+        }
 
-        return $bookingFacilities + $guestEntryFacilities;
+        // Add guest entry facilities unless entry_type is booking
+        if (empty($this->filters['entry_type']) || $this->filters['entry_type'] === 'walk_in') {
+            $guestEntryFacilities = GuestEntry::where('is_checked_out', true)
+                ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
+                ->sum('facility_subtotal');
+            $total += $guestEntryFacilities;
+        }
+
+        return $total;
     }
 
     /**
      * Get third-party services
+     * ✅ FILTER: By entry_type if specified
      */
     protected function getThirdPartyServices(): float
     {
-        $bookingServices = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
-            ->whereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo])
-            ->sum('third_party_service_amount');
+        $total = 0;
 
-        $guestEntryServices = GuestEntry::where('is_checked_out', true)
-            ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
-            ->sum('third_party_service_amount');
+        // Add booking services unless entry_type is walk_in
+        if (empty($this->filters['entry_type']) || $this->filters['entry_type'] === 'booking') {
+            $bookingServices = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
+                ->whereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo])
+                ->sum('third_party_service_amount');
+            $total += $bookingServices;
+        }
 
-        return $bookingServices + $guestEntryServices;
+        // Add guest entry services unless entry_type is booking
+        if (empty($this->filters['entry_type']) || $this->filters['entry_type'] === 'walk_in') {
+            $guestEntryServices = GuestEntry::where('is_checked_out', true)
+                ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
+                ->sum('third_party_service_amount');
+            $total += $guestEntryServices;
+        }
+
+        return $total;
     }
 
     /**
      * Get discounts given (from billings for bookings, direct from guest_entries)
+     * ✅ FILTER: By entry_type if specified
      */
     protected function getDiscountsGiven(): float
     {
-        // Get completed booking IDs
-        $bookingIds = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
-            ->whereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo])
-            ->pluck('id');
+        $total = 0;
 
-        // Get discounts from billings for bookings
-        $bookingDiscounts = Billing::where('billable_type', Booking::class)
-            ->whereIn('billable_id', $bookingIds)
-            ->sum('discount_amount');
+        // Add booking discounts unless entry_type is walk_in
+        if (empty($this->filters['entry_type']) || $this->filters['entry_type'] === 'booking') {
+            // Get completed booking IDs
+            $bookingIds = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
+                ->whereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo])
+                ->pluck('id');
 
-        // Get discounts from guest entries (has discount_amount column)
-        $guestEntryDiscounts = GuestEntry::where('is_checked_out', true)
-            ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
-            ->sum('discount_amount');
+            // Get discounts from billings for bookings
+            $bookingDiscounts = Billing::where('billable_type', Booking::class)
+                ->whereIn('billable_id', $bookingIds)
+                ->sum('discount_amount');
+            $total += $bookingDiscounts;
+        }
 
-        return $bookingDiscounts + $guestEntryDiscounts;
+        // Add guest entry discounts unless entry_type is booking
+        if (empty($this->filters['entry_type']) || $this->filters['entry_type'] === 'walk_in') {
+            // Get discounts from guest entries (has discount_amount column)
+            $guestEntryDiscounts = GuestEntry::where('is_checked_out', true)
+                ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
+                ->sum('discount_amount');
+            $total += $guestEntryDiscounts;
+        }
+
+        return $total;
     }
 
     /**
@@ -447,34 +498,42 @@ class RevenueReportService extends ReportService
 
     /**
      * Get detailed transactions list (completed billings)
+     * ✅ FILTER: By entry_type if specified
      */
     protected function getTransactions(): array
     {
         return $this->getCachedData('transactions', function () {
-            // Get completed billings for bookings
-            $bookingIds = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
-                ->where(function($query) {
-                    $query->whereBetween('actual_check_out_datetime', [$this->dateFrom, $this->dateTo])
-                          ->orWhereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo]);
-                })
-                ->pluck('id');
+            $bookingBillings = collect();
+            $guestEntryBillings = collect();
 
-            $bookingBillings = Billing::where('billable_type', Booking::class)
-                ->whereIn('billable_id', $bookingIds)
-                ->where('billing_status', 'completed')
-                ->with(['billable', 'payments'])
-                ->get();
+            // Get completed billings for bookings unless entry_type is walk_in
+            if (empty($this->filters['entry_type']) || $this->filters['entry_type'] === 'booking') {
+                $bookingIds = Booking::whereIn('booking_status', config('reports.revenue.completed_statuses.bookings'))
+                    ->where(function($query) {
+                        $query->whereBetween('actual_check_out_datetime', [$this->dateFrom, $this->dateTo])
+                              ->orWhereBetween('check_out_datetime', [$this->dateFrom, $this->dateTo]);
+                    })
+                    ->pluck('id');
 
-            // Get completed billings for guest entries
-            $guestEntryIds = GuestEntry::where('is_checked_out', true)
-                ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
-                ->pluck('id');
+                $bookingBillings = Billing::where('billable_type', Booking::class)
+                    ->whereIn('billable_id', $bookingIds)
+                    ->where('billing_status', 'completed')
+                    ->with(['billable', 'payments'])
+                    ->get();
+            }
 
-            $guestEntryBillings = Billing::where('billable_type', GuestEntry::class)
-                ->whereIn('billable_id', $guestEntryIds)
-                ->where('billing_status', 'completed')
-                ->with(['billable', 'payments'])
-                ->get();
+            // Get completed billings for guest entries unless entry_type is booking
+            if (empty($this->filters['entry_type']) || $this->filters['entry_type'] === 'walk_in') {
+                $guestEntryIds = GuestEntry::where('is_checked_out', true)
+                    ->whereBetween('checkout_datetime', [$this->dateFrom, $this->dateTo])
+                    ->pluck('id');
+
+                $guestEntryBillings = Billing::where('billable_type', GuestEntry::class)
+                    ->whereIn('billable_id', $guestEntryIds)
+                    ->where('billing_status', 'completed')
+                    ->with(['billable', 'payments'])
+                    ->get();
+            }
 
             // Merge and format transactions
             $allBillings = $bookingBillings->concat($guestEntryBillings);

@@ -11,6 +11,12 @@ use Log;
 
 class BillingService
 {
+    protected $conflictResolutionService;
+
+    public function __construct(BookingConflictResolutionService $conflictResolutionService = null)
+    {
+        $this->conflictResolutionService = $conflictResolutionService ?? app(BookingConflictResolutionService::class);
+    }
     /**
      * Create billing for a new booking
      * 
@@ -62,16 +68,22 @@ class BillingService
                 if ($amountPaid >= $totalAmount) {
                     // Full payment
                     $this->recordPayment($billing, $paymentData, 'full');
-                    
+
                     // Update booking to Confirmed
                     $booking->update(['booking_status' => 'Confirmed']);
-                    
+
+                    // ✅ Auto-cancel conflicting pending bookings
+                    $this->cancelConflictingPendingBookings($booking);
+
                 } elseif ($amountPaid >= $downpaymentRequired) {
                     // Downpayment (50%+)
                     $this->recordPayment($billing, $paymentData, 'downpayment');
-                    
+
                     // Update booking to Confirmed
                     $booking->update(['booking_status' => 'Confirmed']);
+
+                    // ✅ Auto-cancel conflicting pending bookings
+                    $this->cancelConflictingPendingBookings($booking);
                     
                 } else {
                     // Partial payment (< 50%) - still Pending
@@ -343,10 +355,10 @@ class BillingService
 
     /**
      * ❌ DEPRECATED: Use reversePayment() instead
-     * 
+     *
      * This method is kept for backward compatibility but will be removed in future versions.
      * Please use reversePayment() for better accounting practices.
-     * 
+     *
      * @deprecated 1.0.0 Use reversePayment() instead
      */
     public function deletePayment(Payment $payment): void
@@ -354,5 +366,35 @@ class BillingService
         throw new \Exception(
             'Payment deletion is no longer supported. Please use reversePayment() method instead for proper accounting.'
         );
+    }
+
+    /**
+     * ✅ Cancel conflicting pending bookings when a booking is confirmed
+     *
+     * @param Booking $confirmedBooking The booking that was just confirmed
+     * @return array Summary of cancelled bookings
+     */
+    protected function cancelConflictingPendingBookings(Booking $confirmedBooking): array
+    {
+        if (!$this->conflictResolutionService) {
+            Log::warning('BookingConflictResolutionService not available, skipping conflict check');
+            return [
+                'cancelled_count' => 0,
+                'cancelled_bookings' => [],
+                'message' => 'Conflict resolution service not available',
+            ];
+        }
+
+        $result = $this->conflictResolutionService->cancelConflictingPendingBookings($confirmedBooking);
+
+        if ($result['cancelled_count'] > 0) {
+            Log::info('Auto-cancelled conflicting pending bookings', [
+                'confirmed_booking_id' => $confirmedBooking->id,
+                'confirmed_booking_reference' => $confirmedBooking->booking_reference,
+                'cancelled_count' => $result['cancelled_count'],
+            ]);
+        }
+
+        return $result;
     }
 }

@@ -25,6 +25,7 @@ class ReportController extends Controller
             'facility_type_id' => 'nullable|integer|exists:facility_types,id',
             'payment_method' => 'nullable|string|in:cash,gcash,bank_transfer,credit_card,debit_card,other',
             'staff_id' => 'nullable|integer|exists:users,id',
+            'entry_type' => 'nullable|string|in:booking,walk_in',
         ]);
 
         try {
@@ -50,6 +51,9 @@ class ReportController extends Controller
             }
             if (!empty($validated['staff_id'])) {
                 $filters['staff_id'] = $validated['staff_id'];
+            }
+            if (!empty($validated['entry_type'])) {
+                $filters['entry_type'] = $validated['entry_type'];
             }
             
             if (!empty($filters)) {
@@ -96,6 +100,7 @@ class ReportController extends Controller
             'facility_type_id' => 'nullable|integer|exists:facility_types,id',
             'payment_method' => 'nullable|string|in:cash,gcash,bank_transfer,credit_card,debit_card,other',
             'staff_id' => 'nullable|integer|exists:users,id',
+            'entry_type' => 'nullable|string|in:booking,walk_in',
         ]);
 
         try {
@@ -121,6 +126,9 @@ class ReportController extends Controller
             }
             if (!empty($validated['staff_id'])) {
                 $filters['staff_id'] = $validated['staff_id'];
+            }
+            if (!empty($validated['entry_type'])) {
+                $filters['entry_type'] = $validated['entry_type'];
             }
             
             if (!empty($filters)) {
@@ -173,6 +181,7 @@ class ReportController extends Controller
             'facility_type_id' => 'nullable|integer|exists:facility_types,id',
             'payment_method' => 'nullable|string|in:cash,gcash,bank_transfer,credit_card,debit_card,other',
             'staff_id' => 'nullable|integer|exists:users,id',
+            'entry_type' => 'nullable|string|in:booking,walk_in',
         ]);
 
         try {
@@ -198,6 +207,9 @@ class ReportController extends Controller
             }
             if (!empty($validated['staff_id'])) {
                 $filters['staff_id'] = $validated['staff_id'];
+            }
+            if (!empty($validated['entry_type'])) {
+                $filters['entry_type'] = $validated['entry_type'];
             }
             
             if (!empty($filters)) {
@@ -277,6 +289,10 @@ class ReportController extends Controller
                     ['value' => 'credit_card', 'label' => 'Credit Card'],
                     ['value' => 'debit_card', 'label' => 'Debit Card'],
                     ['value' => 'other', 'label' => 'Other'],
+                ],
+                'entry_types' => [
+                    ['value' => 'booking', 'label' => 'Bookings'],
+                    ['value' => 'walk_in', 'label' => 'Walk-in Entries'],
                 ],
                 'staff' => \App\Models\User::select('id', 'first_name', 'last_name')
                     ->get()

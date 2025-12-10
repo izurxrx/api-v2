@@ -227,6 +227,19 @@ class GuestMonitoringController extends Controller
                     $billing->refresh();
                 }
                 
+                // ✅ STEP 11.6: Store per-guest rates and entry type in billing metadata
+                $perGuestRates = [];
+                if ($request->has('guest_details')) {
+                    foreach ($request->guest_details as $guestDetail) {
+                        $guestType = strtolower($guestDetail['guest_type_name']);
+                        // Use entrance rate as the per-guest rate
+                        $perGuestRates[$guestType] = $entranceRate->base_price / max(1, $request->number_of_guests);
+                    }
+                }
+                
+                $billing->setPerGuestRates($perGuestRates);
+                $billing->setEntryType('walk_in');
+                
                 // ✅ STEP 12: Get capacity warnings
                 $warnings = session('capacity_warnings', []);
                 
@@ -357,56 +370,64 @@ class GuestMonitoringController extends Controller
     public function update(UpdateGuestEntryRequest $request, $id)
     {
         return DB::transaction(function () use ($request, $id) {
-            $guestEntry = GuestEntry::with([
-                'details',
-                'facilities',
-                'thirdPartyServices',
-                'billing.payments',
-            ])->findOrFail($id);
-            
-            // ✅ Block all walk-in edits - extensions only
-            if ($guestEntry->entry_type === 'walk_in') {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'Walk-in entries cannot be edited. Use billing extensions to add facilities, guests, or services.',
-                    'hint' => 'POST /api/billings/{billing_id}/extensions',
-                ], 403);
-            }
-            
-            // ✅ Block updates to checked-out entries
-            if ($guestEntry->is_checked_out) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'Cannot update a checked-out guest entry',
-                ], 403);
-            }
-            
-            // ✅ For checked-in bookings, only allow name and contact updates
-            if ($guestEntry->booking_id) {
-                $guestEntry->update([
-                    'guest_name' => $request->guest_name,
-                    'contact_number' => $request->contact_number,
-                ]);
-                
-                return response()->json([
-                    'status' => 'success',
-                    'message' => 'Guest contact details updated. Use billing extensions to add facilities, guests, or services.',
-                    'data' => new GuestEntryResource($guestEntry->fresh([
-                        'entranceRate',
-                        'details.rate',
-                        'facilities.facility',
-                        'thirdPartyServices',
-                        'createdBy',
-                        'billing.payments',
-                    ])),
-                ]);
-            }
-            
+            return $this->performGuestEntryUpdate($request, $id);
+        });
+    }
+
+    /**
+     * Perform the actual guest entry update logic
+     */
+    private function performGuestEntryUpdate(UpdateGuestEntryRequest $request, $id)
+    {
+        $guestEntry = GuestEntry::with([
+            'details',
+            'facilities',
+            'thirdPartyServices',
+            'billing.payments',
+        ])->findOrFail($id);
+        
+        // ✅ Block all walk-in edits - extensions only
+        if ($guestEntry->entry_type === 'walk_in') {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Invalid update request',
-            ], 400);
-        });
+                'message' => 'Walk-in entries cannot be edited. Use billing extensions to add facilities, guests, or services.',
+                'hint' => 'POST /api/billings/{billing_id}/extensions',
+            ], 403);
+        }
+        
+        // ✅ Block updates to checked-out entries
+        if ($guestEntry->is_checked_out) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Cannot update a checked-out guest entry',
+            ], 403);
+        }
+        
+        // ✅ For checked-in bookings, only allow name and contact updates
+        if ($guestEntry->booking_id) {
+            $guestEntry->update([
+                'guest_name' => $request->guest_name,
+                'contact_number' => $request->contact_number,
+            ]);
+            
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Guest contact details updated. Use billing extensions to add facilities, guests, or services.',
+                'data' => new GuestEntryResource($guestEntry->fresh([
+                    'entranceRate',
+                    'details.rate',
+                    'facilities.facility',
+                    'thirdPartyServices',
+                    'createdBy',
+                    'billing.payments',
+                ])),
+            ]);
+        }
+        
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Invalid update request',
+        ], 400);
     }
 
     /**
@@ -416,7 +437,16 @@ class GuestMonitoringController extends Controller
     public function checkout(CheckoutGuestEntryRequest $request, $id)
     {
         return DB::transaction(function () use ($request, $id) {
-            $guestEntry = GuestEntry::with(['billing.payments', 'facilities.rate', 'facilities.facility', 'booking'])->findOrFail($id);
+            return $this->performCheckout($request, $id);
+        });
+    }
+
+    /**
+     * Perform the actual checkout logic
+     */
+    private function performCheckout(CheckoutGuestEntryRequest $request, $id)
+    {
+        $guestEntry = GuestEntry::with(['billing.payments', 'facilities.rate', 'facilities.facility', 'booking'])->findOrFail($id);
             
             // ✅ Block checkout for walk-in guests (they don't need checkout)
             if ($guestEntry->entry_type === 'walk_in') {
@@ -610,37 +640,27 @@ class GuestMonitoringController extends Controller
                     ]);
                 }
             }
-            
-            Log::info('Walk-in guest checked out', [
-                'guest_entry_id' => $guestEntry->id,
-                'checked_out_by' => auth()->id(),
-                'exit_datetime' => $exitDateTime,
-                'overtime_charges' => $overtimeDetails,
-                'overtime_total' => $overtimeTotal,
-            ]);
-            
-            return response()->json([
-                'status' => 'success',
-                'message' => 'Guest checked out successfully',
-                'data' => new GuestEntryResource($guestEntry->fresh([
-                    'entranceRate',
-                    'guestDetails',
-                    'facilities.facility',
-                    'facilities.rate',
-                    'thirdPartyServices',
-                    'billing.payments',
-                    'billing.extensions',
-                    'createdBy',
-                    'checkedOutBy',
-                ])),
-                'overtime' => [
-                    'has_overtime' => $overtimeTotal > 0,
-                    'total' => $overtimeTotal,
-                    'formatted_total' => '₱' . number_format($overtimeTotal, 2),
-                    'details' => $overtimeDetails,
-                ],
-            ]);
-        });
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Guest checked out successfully',
+            'data' => new GuestEntryResource($guestEntry->fresh([
+                'entranceRate',
+                'guestDetails',
+                'facilities.facility',
+                'facilities.rate',
+                'thirdPartyServices',
+                'billing.payments',
+                'billing.extensions',
+                'createdBy',
+                'checkedOutBy',
+            ])),
+            'overtime' => [
+                'has_overtime' => $overtimeTotal > 0,
+                'total' => $overtimeTotal,
+                'formatted_total' => '₱' . number_format($overtimeTotal, 2),
+                'details' => $overtimeDetails,
+            ],
+        ]);
     }
 
     /**
@@ -908,16 +928,25 @@ class GuestMonitoringController extends Controller
         ]);
 
         return DB::transaction(function () use ($request, $bookingId) {
-            try {
-                // ✅ STEP 1: Find and validate booking
-                $booking = Booking::with([
-                    'entranceRate',
-                    'facilities.facility',
-                    'facilities.rate',
-                    'guestDiscounts.discount',
-                    'thirdPartyServices',
-                    'billing.payments',
-                ])->findOrFail($bookingId);
+            return $this->performBookingCheckIn($request, $bookingId);
+        });
+    }
+
+    /**
+     * Perform the actual booking check-in logic
+     */
+    private function performBookingCheckIn(Request $request, $bookingId)
+    {
+        try {
+            // ✅ STEP 1: Find and validate booking
+            $booking = Booking::with([
+                'entranceRate',
+                'facilities.facility',
+                'facilities.rate',
+                'guestDiscounts.discount',
+                'thirdPartyServices',
+                'billing.payments',
+            ])->findOrFail($bookingId);
 
                 // ✅ STEP 2: Validate booking can be checked in
                 if ($booking->booking_status !== 'Confirmed') {
@@ -980,6 +1009,11 @@ class GuestMonitoringController extends Controller
                 // ✅ STEP 3: Create guest entry from booking
                 $actualGuests = $request->actual_guests ?? $booking->number_of_guests;
                 $checkInDateTime = now();
+
+                $guestEntry = GuestEntry::with(
+                    'billing',
+                     'billing.payments',
+                );
 
                 $guestEntry = GuestEntry::create([
                     'booking_id' => $booking->id,
@@ -1077,7 +1111,35 @@ class GuestMonitoringController extends Controller
                     ]);
                 }
 
-                // ✅ STEP 7: Update booking status to Checked_In
+                // ✅ STEP 7: Link billing to guest entry
+                if ($booking->billing) {
+                    $booking->billing->update([
+                        'guest_entry_id' => $guestEntry->id,
+                    ]);
+
+                    Log::info('Billing linked to guest entry', [
+                        'billing_id' => $booking->billing->id,
+                        'guest_entry_id' => $guestEntry->id,
+                        'booking_id' => $booking->id,
+                    ]);
+                    
+                    // ✅ STEP 7.5: Store per-guest rates and entry type in billing metadata
+                    $perGuestRates = [];
+                    
+                    if ($booking->booking_type === 'Swimming' && $booking->guestDiscounts()->count() > 0) {
+                        foreach ($booking->guestDiscounts as $guestDiscount) {
+                            $guestType = strtolower($guestDiscount->guest_type);
+                            $perGuestRates[$guestType] = $booking->entranceRate->base_price;
+                        }
+                    } else {
+                        $perGuestRates['regular'] = $booking->entranceRate ? $booking->entranceRate->base_price : 0;
+                    }
+                    
+                    $booking->billing->setPerGuestRates($perGuestRates);
+                    $booking->billing->setEntryType('booking');
+                }
+
+                // ✅ STEP 8: Update booking status to Checked_In
                 $booking->update([
                     'booking_status' => 'Checked_In',
                     'actual_check_in_datetime' => $checkInDateTime,
@@ -1085,7 +1147,7 @@ class GuestMonitoringController extends Controller
                     'actual_guests' => $actualGuests,
                 ]);
 
-                // ✅ STEP 8: Log check-in
+                // ✅ STEP 9: Log check-in
                 Log::info('Booking checked in via Guest Monitoring', [
                     'booking_id' => $booking->id,
                     'booking_reference' => $booking->booking_reference,
@@ -1094,7 +1156,7 @@ class GuestMonitoringController extends Controller
                     'checked_in_by' => auth()->id(),
                 ]);
 
-                // Load relationships for response
+                // ✅ STEP 10: Load relationships for response (AFTER billing is linked)
                 $guestEntry->load([
                     'booking',
                     'entranceRate',
@@ -1115,19 +1177,18 @@ class GuestMonitoringController extends Controller
                     ],
                 ], 201);
 
-            } catch (\Exception $e) {
-                Log::error('Booking check-in failed', [
-                    'booking_id' => $bookingId,
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                ]);
+        } catch (\Exception $e) {
+            Log::error('Booking check-in failed', [
+                'booking_id' => $bookingId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
 
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'Failed to check in booking: ' . $e->getMessage(),
-                ], 500);
-            }
-        });
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to check in booking: ' . $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**

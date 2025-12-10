@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(php artisan:*)",
+      "Bash(php:*)",
+      "Bash(curl:*)",
+      "Bash(python -m json.tool:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

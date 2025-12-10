@@ -61,6 +61,26 @@ abstract class ReportService
                 $this->dateFrom = $now->copy()->startOfMonth();
                 $this->dateTo = $now->copy()->endOfMonth();
                 break;
+            case 'last_month':
+                $this->dateFrom = $now->copy()->subMonth()->startOfMonth();
+                $this->dateTo = $now->copy()->subMonth()->endOfMonth();
+                break;
+            case 'this_quarter':
+                $this->dateFrom = $now->copy()->firstOfQuarter();
+                $this->dateTo = $now->copy()->lastOfQuarter();
+                break;
+            case 'last_quarter':
+                $this->dateFrom = $now->copy()->subQuarter()->firstOfQuarter();
+                $this->dateTo = $now->copy()->subQuarter()->lastOfQuarter();
+                break;
+            case 'this_year':
+                $this->dateFrom = $now->copy()->startOfYear();
+                $this->dateTo = $now->copy()->endOfYear();
+                break;
+            case 'last_year':
+                $this->dateFrom = $now->copy()->subYear()->startOfYear();
+                $this->dateTo = $now->copy()->subYear()->endOfYear();
+                break;
             default:
                 throw new \InvalidArgumentException("Invalid date preset: {$preset}");
         }

@@ -17,8 +17,10 @@ use App\Models\BillingExtension;
 use App\Services\BillingService;
 use App\Services\FacilityAvailabilityService;
 use App\Services\OvertimeCalculationService;
+use App\Services\BookingOverlapService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
@@ -26,13 +28,16 @@ class BookingController extends Controller
 {
     protected $billingService;
     protected $availabilityService;
+    protected $overlapService;
 
     public function __construct(
         BillingService $billingService,
-        FacilityAvailabilityService $availabilityService
+        FacilityAvailabilityService $availabilityService,
+        BookingOverlapService $overlapService
     ) {
         $this->billingService = $billingService;
         $this->availabilityService = $availabilityService;
+        $this->overlapService = $overlapService;
     }
 
     /**
@@ -114,13 +119,51 @@ class BookingController extends Controller
                 $checkInTime = $request->check_in_time ?: '14:00';
                 $checkOutDate = Carbon::parse($request->check_out_date);
                 $checkOutTime = $request->check_out_time ?: '12:00';
-                
+
                 $checkInDateTime = Carbon::parse("{$checkInDate->toDateString()} {$checkInTime}");
                 $checkOutDateTime = Carbon::parse("{$checkOutDate->toDateString()} {$checkOutTime}");
-                
+
                 // Calculate duration
                 $durationHours = $checkInDateTime->diffInHours($checkOutDateTime);
-                
+
+                // ✅ STEP 6.5: Check for booking proximity conflicts (2-hour window)
+                $overlapCheck = $this->overlapService->checkProximity(
+                    $checkInDateTime,
+                    $checkOutDateTime,
+                    null, // No booking to exclude (this is a new booking)
+                    2 // 2-hour proximity window
+                );
+
+                // If conflicts found and no manager override provided
+                if ($overlapCheck['has_conflicts'] && !$request->has('manager_override')) {
+                    Log::warning('Booking proximity conflict detected', [
+                        'check_in' => $checkInDateTime->toDateTimeString(),
+                        'check_out' => $checkOutDateTime->toDateTimeString(),
+                        'conflicts' => $overlapCheck['conflicts'],
+                    ]);
+
+                    return response()->json([
+                        'status' => 'warning',
+                        'message' => 'Booking conflicts detected. Manager override required.',
+                        'warning_type' => 'booking_proximity_conflict',
+                        'conflicts' => $overlapCheck['conflicts'],
+                        'conflict_count' => $overlapCheck['conflict_count'],
+                        'requires_manager_override' => true,
+                        'override_instructions' => [
+                            'message' => 'To proceed with this booking, a manager must provide their password and reason for override.',
+                            'required_fields' => [
+                                'manager_override.password' => 'Manager\'s password',
+                                'manager_override.reason' => 'Reason for overriding the proximity warning',
+                            ],
+                        ],
+                    ], 422);
+                }
+
+                // If conflicts found and manager override provided, validate it
+                if ($overlapCheck['has_conflicts'] && $request->has('manager_override')) {
+                    $this->validateManagerOverride($request->manager_override, $overlapCheck);
+                }
+
                 // ✅ STEP 7: Create booking record
                 $booking = Booking::create([
                     'booking_reference' => Booking::generateBookingReference(),
@@ -1081,15 +1124,18 @@ class BookingController extends Controller
                 $billing = $booking->billing;
                 $totalPaid = $billing->downpayment_paid + $billing->balance_paid;
                 $downpaymentPaid = $billing->downpayment_paid ?? 0;
-                
-                // ✅ POLICY: Downpayment is non-refundable by default
-                $maxRefundAmount = $totalPaid - $downpaymentPaid;
-                
-                // ✅ OVERRIDE: Manager can override downpayment policy
+                $balancePaid = $billing->balance_paid ?? 0;
+
+                // ✅ POLICY: Downpayment (50% of booking total) is 100% non-refundable
+                // Example: ₱10,000 booking → ₱5,000 downpayment (100% non-refundable)
+                // Only balance payments exceeding the downpayment can be refunded
+                $maxRefundAmount = $balancePaid; // Only balance payments are refundable
+
+                // ✅ OVERRIDE: Manager can override downpayment policy to refund 100%
                 if ($request->override_downpayment_policy === true) {
-                    $maxRefundAmount = $totalPaid;
+                    $maxRefundAmount = $totalPaid; // Refund everything including non-refundable downpayment
                 }
-                
+
                 $refundAmount = min($request->refund_amount, $maxRefundAmount);
                 
                 // ✅ Update billing status to voided (cancelled) and payment status to refunded
@@ -1114,19 +1160,35 @@ class BookingController extends Controller
                     'booking_id' => $booking->id,
                     'refund_amount' => $refundAmount,
                     'total_paid' => $totalPaid,
+                    'downpayment_paid' => $downpaymentPaid,
+                    'balance_paid' => $balancePaid,
+                    'non_refundable_downpayment' => $downpaymentPaid,
                     'downpayment_overridden' => $request->override_downpayment_policy ?? false,
                     'refunded_by' => auth()->id(),
                 ]);
-                
+
                 return response()->json([
                     'status' => 'success',
                     'message' => 'Booking cancelled and refunded successfully',
                     'data' => [
                         'booking' => new BookingResource($booking->fresh()),
                         'refund' => [
-                            'amount' => $refundAmount,
-                            'total_paid' => $totalPaid,
-                            'downpayment_policy_overridden' => $request->override_downpayment_policy ?? false,
+                            'refund_amount' => $refundAmount,
+                            'payment_breakdown' => [
+                                'total_paid' => $totalPaid,
+                                'downpayment_paid' => $downpaymentPaid,
+                                'balance_paid' => $balancePaid,
+                            ],
+                            'refund_breakdown' => [
+                                'refundable_from_downpayment' => 0, // Downpayment is 100% non-refundable
+                                'non_refundable_from_downpayment' => $downpaymentPaid,
+                                'refundable_from_balance' => $balancePaid,
+                                'max_refundable' => $maxRefundAmount,
+                            ],
+                            'policy' => [
+                                'downpayment_policy' => 'Downpayment (50% of booking total) is 100% non-refundable',
+                                'downpayment_policy_overridden' => $request->override_downpayment_policy ?? false,
+                            ],
                             'non_refundable_amount' => $totalPaid - $refundAmount,
                         ],
                     ],
@@ -1140,5 +1202,82 @@ class BookingController extends Controller
                 throw $e;
             }
         });
+    }
+
+    /**
+     * Validate manager override for booking proximity conflicts
+     *
+     * @param array $overrideData
+     * @param array $overlapCheck
+     * @throws \Illuminate\Validation\ValidationException
+     * @return void
+     */
+    private function validateManagerOverride($overrideData, $overlapCheck)
+    {
+        $user = auth()->user();
+
+        // ✅ VALIDATION 1: Check if user is authenticated
+        if (!$user) {
+            abort(401, 'Unauthenticated. Please log in to override booking conflicts.');
+        }
+
+        // ✅ VALIDATION 2: Check if user has Manager or Admin role
+        if (!$user->hasRole(['Manager', 'Admin'])) {
+            Log::warning('Unauthorized override attempt', [
+                'user_id' => $user->id,
+                'user_role' => $user->getRoleNames(),
+                'conflicts' => $overlapCheck['conflicts'],
+            ]);
+
+            abort(403, 'Only Managers or Admins can override booking proximity warnings.');
+        }
+
+        // ✅ VALIDATION 3: Validate password field exists
+        if (!isset($overrideData['password'])) {
+            abort(422, 'Manager password is required to override booking conflicts.');
+        }
+
+        // ✅ VALIDATION 4: Verify password matches current user
+        if (!Hash::check($overrideData['password'], $user->password)) {
+            Log::warning('Failed manager override - incorrect password', [
+                'user_id' => $user->id,
+                'username' => $user->username,
+                'conflicts' => $overlapCheck['conflicts'],
+            ]);
+
+            abort(401, 'Incorrect password. Please verify your credentials.');
+        }
+
+        // ✅ VALIDATION 5: Validate reason field exists
+        if (!isset($overrideData['reason']) || empty(trim($overrideData['reason']))) {
+            abort(422, 'A reason is required to override booking conflicts.');
+        }
+
+        // ✅ VALIDATION 6: Reason must be at least 10 characters
+        if (strlen(trim($overrideData['reason'])) < 10) {
+            abort(422, 'Override reason must be at least 10 characters long.');
+        }
+
+        // ✅ All validations passed - Log the override
+        Log::info('✅ Manager override approved for booking proximity conflict', [
+            'manager_id' => $user->id,
+            'manager_name' => $user->full_name,
+            'manager_role' => $user->getRoleNames(),
+            'override_reason' => $overrideData['reason'],
+            'conflicts_overridden' => $overlapCheck['conflicts'],
+            'conflict_count' => $overlapCheck['conflict_count'],
+            'severity_levels' => collect($overlapCheck['conflicts'])->pluck('severity')->unique()->toArray(),
+        ]);
+
+        // Log to activity log for audit trail
+        activity()
+            ->causedBy($user)
+            ->withProperties([
+                'action' => 'booking_proximity_override',
+                'reason' => $overrideData['reason'],
+                'conflicts' => $overlapCheck['conflicts'],
+                'conflict_count' => $overlapCheck['conflict_count'],
+            ])
+            ->log('Manager overrode booking proximity warning');
     }
 }

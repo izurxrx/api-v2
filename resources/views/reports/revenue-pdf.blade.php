@@ -254,22 +254,22 @@
         </table>
     </div>
 
-    <!-- Revenue by Facility Type -->
+    <!-- Revenue by Facility -->
     <div class="section">
-        <div class="section-title">REVENUE BY FACILITY TYPE</div>
-        
+        <div class="section-title">REVENUE BY FACILITY</div>
+
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Facility Type</th>
+                    <th>Facility</th>
                     <th class="text-right">Revenue</th>
                     <th class="text-center">Percentage</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach($by_facility_type as $item)
+                @foreach($by_facility as $item)
                 <tr>
-                    <td>{{ $item['facility_type'] }}</td>
+                    <td>{{ $item['facility_name'] }} ({{ $item['facility_type'] }})</td>
                     <td class="text-right">{{ $item['revenue_formatted'] }}</td>
                     <td class="text-center">{{ number_format($item['percentage'], 1) }}%</td>
                 </tr>

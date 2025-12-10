@@ -64,7 +64,8 @@ class FacilityAvailabilityService
             'end' => $end->toDateTimeString(),
         ]);
 
-        // ✅ FIXED: Count occupied by Bookings with proper overlap detection
+        // ✅ Count occupied by Bookings - ONLY Confirmed and Checked_In bookings reduce availability
+        // Pending bookings do NOT reserve facilities until confirmed
         $occupiedByBookings = BookingFacility::where('facility_id', $facilityId)
             ->whereHas('booking', function($q) use ($start, $end, $excludeBookingId) {
                 $q->where(function($query) use ($start, $end) {
@@ -72,7 +73,7 @@ class FacilityAvailabilityService
                     $query->where('check_in_datetime', '<', $end)
                           ->where('check_out_datetime', '>', $start);
                 })
-                ->whereIn('booking_status', ['Pending', 'Confirmed', 'Checked_In']);
+                ->whereIn('booking_status', ['Confirmed', 'Checked_In']);
 
                 // Exclude specific booking (for updates)
                 if ($excludeBookingId) {
@@ -197,7 +198,8 @@ class FacilityAvailabilityService
         $start = Carbon::parse($startDateTime);
         $end = Carbon::parse($endDateTime);
 
-        // ✅ FIXED: Proper overlap detection
+        // ✅ Get conflicts - ONLY Confirmed and Checked_In bookings are considered conflicts
+        // Pending bookings are not shown as conflicts since they don't block availability
         $bookings = Booking::whereHas('facilities', function($q) use ($facilityId) {
             $q->where('facility_id', $facilityId);
         })
@@ -206,7 +208,7 @@ class FacilityAvailabilityService
             $q->where('check_in_datetime', '<', $end)
               ->where('check_out_datetime', '>', $start);
         })
-        ->whereIn('booking_status', ['Pending', 'Confirmed', 'Checked_In'])
+        ->whereIn('booking_status', ['Confirmed', 'Checked_In'])
         ->with(['facilities' => function($q) use ($facilityId) {
             $q->where('facility_id', $facilityId);
         }])

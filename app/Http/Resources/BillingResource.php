@@ -33,8 +33,8 @@ class BillingResource extends JsonResource
             'total_amount_raw' => (float) $this->total_amount,
             'amount_paid' => number_format($this->amount_paid, 2),
             'amount_paid_raw' => (float) $this->amount_paid,
-            'balance' => number_format($this->balance, 2),
-            'balance_raw' => (float) $this->balance,
+            'balance' => number_format(max(0, $this->total_amount - $this->amount_paid), 2),
+            'balance_raw' => (float) max(0, $this->total_amount - $this->amount_paid),
             'refund_amount' => number_format($this->refund_amount, 2),
             'refund_amount_raw' => (float) $this->refund_amount,
             
@@ -116,6 +116,11 @@ class BillingResource extends JsonResource
             }),
             'extensions_count' => $this->extensions?->count() ?? 0,
             
+            // ✅ NEW: Entry type and per-guest rates from metadata
+            'entry_type' => $this->getEntryType(),
+            'per_guest_rates' => $this->getPerGuestRates(),
+            'extension_restrictions' => $this->getExtensionRestrictions(),
+            
             // Billable details (when loaded)
             'billable' => $this->when($this->relationLoaded('billable'), function() use ($billable) {
                 if ($billable instanceof Booking) {
@@ -130,7 +135,7 @@ class BillingResource extends JsonResource
                     return [
                         'type' => 'GuestEntry',
                         'reference' => $billable->entry_reference,
-                        'entry_date' => $billable->entry_date?->format('Y-m-d'),
+                        'entry_date' => $billable->entry_date,
                         'total_guests' => $billable->total_guests,
                         'is_checked_out' => $billable->is_checked_out,
                     ];
@@ -210,5 +215,71 @@ class BillingResource extends JsonResource
         }
         
         return now()->diffInDays($this->due_date);
+    }
+
+    // ========================================
+    // ✅ NEW: METADATA HELPER METHODS
+    // ========================================
+
+    /**
+     * ✅ NEW: Get per-guest rates from billing metadata
+     */
+    public function getPerGuestRates(): ?array
+    {
+        $metadata = $this->resource->metadata ?? [];
+        return is_array($metadata) ? ($metadata['per_guest_rates'] ?? null) : null;
+    }
+
+    /**
+     * ✅ NEW: Get entry type from billing metadata
+     */
+    public function getEntryType(): ?string
+    {
+        $metadata = $this->resource->metadata ?? [];
+        return is_array($metadata) ? ($metadata['entry_type'] ?? null) : null;
+    }
+
+    /**
+     * ✅ NEW: Get extension restrictions based on entry type
+     */
+    public function getExtensionRestrictions(): array
+    {
+        $entryType = $this->getEntryType();
+        $restrictions = [];
+        
+        if ($entryType === 'walk_in') {
+            $restrictions = [
+                'can_add_facilities' => true,
+                'can_add_guests' => true,
+                'can_add_services' => true,
+                'can_add_overtime' => false,
+                'restrictions_note' => 'Walk-ins cannot have overtime. They can add facilities and guests.',
+            ];
+        } elseif ($entryType === 'booking') {
+            $billable = $this->billable;
+            $bookingType = $billable?->booking_type ?? 'Unknown';
+            
+            if ($bookingType === 'Package') {
+                $restrictions = [
+                    'can_add_facilities' => true,
+                    'can_add_guests' => false,
+                    'can_add_services' => true,
+                    'can_add_overtime' => true,
+                    'booking_type' => 'Package',
+                    'restrictions_note' => 'Package bookings have fixed guest counts. Can add facilities and overtime.',
+                ];
+            } elseif ($bookingType === 'Swimming') {
+                $restrictions = [
+                    'can_add_facilities' => false,
+                    'can_add_guests' => true,
+                    'can_add_services' => true,
+                    'can_add_overtime' => false,
+                    'booking_type' => 'Swimming',
+                    'restrictions_note' => 'Swimming bookings are day-use with fixed facilities. Can add guests only.',
+                ];
+            }
+        }
+        
+        return $restrictions;
     }
 }

@@ -62,6 +62,7 @@ class Billing extends Model
     protected $fillable = [
         'billable_type',
         'billable_id',
+        'guest_entry_id', // ✅ NEW: Link to guest entry when booking is checked in
         'billing_number',
         'subtotal',
         'discount_amount',
@@ -86,6 +87,7 @@ class Billing extends Model
         'cancelled_by',
         'created_by',
         'notes',
+        'metadata', // ✅ NEW: JSON metadata for per-guest rates and entry type
     ];
 
     protected $casts = [
@@ -103,6 +105,7 @@ class Billing extends Model
         'paid_at' => 'datetime',
         'voided_at' => 'datetime',
         'refunded_at' => 'datetime',
+        'metadata' => 'array', // ✅ NEW: JSON metadata casting
     ];
 
     // ========================================
@@ -222,6 +225,16 @@ class Billing extends Model
     public function billable()
     {
         return $this->morphTo();
+    }
+
+    /**
+     * ✅ NEW: Direct relationship to guest entry
+     * This is used when a booking is checked in and creates a guest entry.
+     * The billing remains linked to the booking (billable), but also references the guest entry.
+     */
+    public function guestEntry()
+    {
+        return $this->belongsTo(GuestEntry::class, 'guest_entry_id');
     }
 
     /**
@@ -561,5 +574,67 @@ class Billing extends Model
         return $query->where('payment_status', '!=', self::PAYMENT_PAID)
                      ->where('due_date', '<', now())
                      ->whereNotNull('due_date');
+    }
+
+    // ========================================
+    // ✅ NEW: METADATA HELPER METHODS
+    // ========================================
+
+    /**
+     * ✅ NEW: Get per-guest rates from metadata
+     * Returns breakdown like: {adult: 100, senior: 80, child: 50, infant: 0}
+     */
+    public function getPerGuestRates(): ?array
+    {
+        return $this->metadata['per_guest_rates'] ?? null;
+    }
+
+    /**
+     * ✅ NEW: Get entry type from metadata
+     * Returns 'walk_in' or 'booking'
+     */
+    public function getEntryType(): ?string
+    {
+        return $this->metadata['entry_type'] ?? null;
+    }
+
+    /**
+     * ✅ NEW: Set per-guest rates in metadata
+     */
+    public function setPerGuestRates(array $rates): void
+    {
+        if (!is_array($this->metadata)) {
+            $this->metadata = [];
+        }
+        
+        $metadata = $this->metadata;
+        $metadata['per_guest_rates'] = $rates;
+        $this->metadata = $metadata;
+        $this->save();
+        
+        Log::info('Per-guest rates stored in billing metadata', [
+            'billing_id' => $this->id,
+            'per_guest_rates' => $rates,
+        ]);
+    }
+
+    /**
+     * ✅ NEW: Set entry type in metadata
+     */
+    public function setEntryType(string $entryType): void
+    {
+        if (!is_array($this->metadata)) {
+            $this->metadata = [];
+        }
+        
+        $metadata = $this->metadata;
+        $metadata['entry_type'] = $entryType;
+        $this->metadata = $metadata;
+        $this->save();
+        
+        Log::info('Entry type stored in billing metadata', [
+            'billing_id' => $this->id,
+            'entry_type' => $entryType,
+        ]);
     }
 }

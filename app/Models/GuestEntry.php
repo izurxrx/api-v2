@@ -128,11 +128,38 @@ class GuestEntry extends Model
     }
     
     /**
-     * ✅ NEW: Polymorphic relationship to billing
+     * ✅ UPDATED: Relationship to billing
+     *
+     * For booking check-ins: Billing is linked via guest_entry_id
+     * For walk-ins: Billing uses polymorphic relationship
+     *
+     * This relationship checks both possibilities.
      */
     public function billing()
     {
-        return $this->morphOne(Billing::class, 'billable');
+        return $this->hasOne(Billing::class, 'guest_entry_id')
+                    ->withDefault(function () {
+                        // If no billing via guest_entry_id, try polymorphic
+                        return $this->morphOne(Billing::class, 'billable')->first();
+                    });
+    }
+
+    /**
+     * Helper method to get billing (tries both methods)
+     */
+    public function getBillingAttribute()
+    {
+        // Try guest_entry_id first
+        $billing = Billing::where('guest_entry_id', $this->id)->first();
+
+        if (!$billing) {
+            // Fall back to polymorphic
+            $billing = Billing::where('billable_type', GuestEntry::class)
+                            ->where('billable_id', $this->id)
+                            ->first();
+        }
+
+        return $billing;
     }
 
     /**
